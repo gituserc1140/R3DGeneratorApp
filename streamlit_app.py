@@ -21,12 +21,20 @@ load_dotenv()
 
 def get_api_key(key_name):
     """Get API key from environment or Streamlit secrets."""
+    runtime_keys = st.session_state.get("runtime_api_keys", {})
+    if key_name in runtime_keys and runtime_keys[key_name]:
+        return runtime_keys[key_name]
+
+    lowered = key_name.lower()
+    if lowered in runtime_keys and runtime_keys[lowered]:
+        return runtime_keys[lowered]
+
     value = os.environ.get(key_name)
     if value:
         return value
 
     # Common fallback for lowercase env var naming.
-    value = os.environ.get(key_name.lower())
+    value = os.environ.get(lowered)
     if value:
         return value
 
@@ -35,7 +43,6 @@ def get_api_key(key_name):
         if key_name in secrets_dict:
             return secrets_dict[key_name]
 
-        lowered = key_name.lower()
         if lowered in secrets_dict:
             return secrets_dict[lowered]
 
@@ -302,6 +309,35 @@ def generate_3d_model_tripo(image_path):
 def main():
     st.title("RKstudio Image to 3D Model Generator")
     st.caption("Safe mode: minimized workflow for reliable startup.")
+
+    with st.expander("API key overrides (session only)", expanded=False):
+        st.caption("Optional: paste keys here to test immediately. These are not saved to repo and reset when session restarts.")
+        runtime_keys = st.session_state.get("runtime_api_keys", {})
+        runtime_keys["OPENAI_API_KEY"] = st.text_input(
+            "OpenAI key",
+            value=runtime_keys.get("OPENAI_API_KEY", ""),
+            type="password",
+            key="override_openai_api_key",
+        ).strip()
+        runtime_keys["HF_TOKEN"] = st.text_input(
+            "Hugging Face key (HF_TOKEN)",
+            value=runtime_keys.get("HF_TOKEN", ""),
+            type="password",
+            key="override_hf_token",
+        ).strip()
+        runtime_keys["STABILITY_KEY"] = st.text_input(
+            "Stability key",
+            value=runtime_keys.get("STABILITY_KEY", ""),
+            type="password",
+            key="override_stability_key",
+        ).strip()
+        runtime_keys["TRIPO3D_API_KEY"] = st.text_input(
+            "Tripo3D key",
+            value=runtime_keys.get("TRIPO3D_API_KEY", ""),
+            type="password",
+            key="override_tripo3d_api_key",
+        ).strip()
+        st.session_state["runtime_api_keys"] = runtime_keys
 
     with st.expander("Runtime status", expanded=True):
         st.write("App initialized successfully.")

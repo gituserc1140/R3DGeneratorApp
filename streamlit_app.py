@@ -1,3 +1,4 @@
+import base64
 import os
 import tempfile
 import time
@@ -278,20 +279,26 @@ def main():
 
     with tab1:
         st.subheader("Step 1: Create or upload an image")
-        mode = st.selectbox("Image generation mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0)
+        mode = st.selectbox(
+            "Image generation mode",
+            ["Fast_Mode_OA", "Slow_Mode_SDXL"],
+            index=0,
+            key="image_mode_select",
+        )
         prompt = st.text_area(
             "Image prompt",
             value="Simple toy model of a chicken on a plain studio background",
+            key="image_prompt_input",
         )
 
-        if st.button("Generate Image"):
+        if st.button("Generate Image", key="generate_image_button"):
             with st.spinner("Generating image..."):
                 image_path = generate_image_openai(prompt) if mode == "Fast_Mode_OA" else generate_image_sdxl(prompt)
                 if image_path:
                     st.session_state["image_path"] = image_path
                     st.image(image_path, caption="Generated Image", width=400)
 
-        uploaded = st.file_uploader("Or upload image", type=["png", "jpg", "jpeg"])
+        uploaded = st.file_uploader("Or upload image", type=["png", "jpg", "jpeg"], key="upload_image_file")
         if uploaded:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
             tmp.write(uploaded.read())
@@ -304,52 +311,71 @@ def main():
         image_path = st.session_state.get("image_path")
         if not image_path:
             st.info("Generate or upload an image in Step 1 first.")
-            return
-
-        st.image(image_path, caption="Input Image", width=320)
-        mode = st.selectbox("3D mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0)
-
-        if mode == "Medium_Quality_Mode_STA":
-            texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
-            foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
-            remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
-            vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
-
-            if st.button("Generate 3D Model"):
-                with st.spinner("Generating 3D model..."):
-                    glb_path = generate_3d_model_stability(
-                        image_path,
-                        texture_resolution,
-                        foreground_ratio,
-                        remesh,
-                        vertex_count,
-                    )
-                    if glb_path:
-                        display_3d_model(glb_path)
-                        with open(glb_path, "rb") as f:
-                            st.download_button(
-                                "Download GLB",
-                                f,
-                                file_name="model.glb",
-                                mime="model/gltf-binary",
-                            )
         else:
-            if st.button("Generate 3D Model"):
-                with st.spinner("Generating 3D model..."):
-                    glb_path = generate_3d_model_tripo(image_path)
-                    if glb_path:
-                        display_3d_model(glb_path)
-                        with open(glb_path, "rb") as f:
-                            st.download_button(
-                                "Download GLB",
-                                f,
-                                file_name="model.glb",
-                                mime="model/gltf-binary",
-                            )
+            st.image(image_path, caption="Input Image", width=320)
+            mode = st.selectbox(
+                "3D mode",
+                ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"],
+                index=0,
+                key="model_mode_select",
+            )
+
+            if mode == "Medium_Quality_Mode_STA":
+                texture_resolution = st.selectbox(
+                    "Texture Resolution",
+                    ["512", "1024", "2048"],
+                    index=1,
+                    key="texture_resolution_select",
+                )
+                foreground_ratio = st.slider(
+                    "Foreground Ratio",
+                    0.1,
+                    1.0,
+                    0.85,
+                    0.05,
+                    key="foreground_ratio_slider",
+                )
+                remesh = st.selectbox("Remesh", ["none", "quad", "triangle"], key="remesh_select")
+                vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1, key="vertex_count_input")
+
+                if st.button("Generate 3D Model", key="generate_3d_stability_button"):
+                    with st.spinner("Generating 3D model..."):
+                        glb_path = generate_3d_model_stability(
+                            image_path,
+                            texture_resolution,
+                            foreground_ratio,
+                            remesh,
+                            vertex_count,
+                        )
+                        if glb_path:
+                            display_3d_model(glb_path)
+                            with open(glb_path, "rb") as f:
+                                st.download_button(
+                                    "Download GLB",
+                                    f,
+                                    file_name="model.glb",
+                                    mime="model/gltf-binary",
+                                    key="download_glb_stability",
+                                )
+            else:
+                if st.button("Generate 3D Model", key="generate_3d_tripo_button"):
+                    with st.spinner("Generating 3D model..."):
+                        glb_path = generate_3d_model_tripo(image_path)
+                        if glb_path:
+                            display_3d_model(glb_path)
+                            with open(glb_path, "rb") as f:
+                                st.download_button(
+                                    "Download GLB",
+                                    f,
+                                    file_name="model.glb",
+                                    mime="model/gltf-binary",
+                                    key="download_glb_tripo",
+                                )
 
 
 try:
     main()
-except Exception:
+except Exception as exc:
     st.error("Startup error detected. Details are shown below.")
-    st.exception(traceback.format_exc())
+    st.exception(exc)
+    st.code(traceback.format_exc())

@@ -206,8 +206,51 @@ def image_to_3d(host, image_path, **kwargs):
     return response.content
 
 
+def preflight_stability_key():
+    """Validate Stability key format and account access before 3D generation."""
+    stability_key = get_api_key("STABILITY_KEY") or get_api_key("STABILITY_API_KEY")
+    if not stability_key:
+        return False, "Stability key missing. Add STABILITY_KEY in secrets."
+
+    try:
+        response = requests.get(
+            "https://api.stability.ai/v1/user/balance",
+            headers={
+                "Authorization": f"Bearer {stability_key}",
+                "Accept": "application/json",
+            },
+            timeout=30,
+        )
+    except Exception as exc:
+        return False, f"Preflight request failed: {exc}"
+
+    if response.status_code == 200:
+        try:
+            payload = response.json()
+            credits = payload.get("credits")
+            if credits is not None:
+                return True, f"Stability key validated. Credits available: {credits}"
+        except Exception:
+            pass
+        return True, "Stability key validated successfully."
+
+    if response.status_code == 401:
+        return False, (
+            "Stability authentication failed (401). The key is invalid, malformed, or sent with a bad Authorization header."
+        )
+    if response.status_code == 403:
+        return False, "Stability request forbidden (403). Key exists but lacks required permissions."
+
+    detail = response.text[:300]
+    return False, f"Stability preflight failed ({response.status_code}): {detail}"
+
+
 def generate_3d_model_stability(image_path, texture_resolution, foreground_ratio, remesh, vertex_count):
     try:
+        preflight_ok, preflight_message = preflight_stability_key()
+        if not preflight_ok:
+            raise ValueError(preflight_message)
+
         host = "https://api.stability.ai/v2beta/3d/stable-fast-3d"
         glb_data = image_to_3d(
             host=host,
@@ -434,6 +477,14 @@ def main():
                 )
                 remesh = st.selectbox("Remesh", ["none", "quad", "triangle"], key="remesh_select")
                 vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1, key="vertex_count_input")
+
+                if st.button("Test Stability Key", key="test_stability_key_button"):
+                    with st.spinner("Checking Stability key..."):
+                        ok, message = preflight_stability_key()
+                    if ok:
+                        st.success(message)
+                    else:
+                        st.error(message)
 
                 if st.button("Generate 3D Model", key="generate_3d_stability_button"):
                     with st.spinner("Generating 3D model..."):

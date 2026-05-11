@@ -1,12 +1,17 @@
-import base64
 import os
 import tempfile
 import time
 import traceback
+from pathlib import Path
 
 import requests
 import streamlit as st
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv():
+        return False
 
 
 load_dotenv()
@@ -25,35 +30,10 @@ def get_api_key(key_name):
 
 
 def display_3d_model(glb_path):
-    """Display a 3D GLB model using Google's model-viewer web component."""
-    with open(glb_path, "rb") as f:
-        glb_data = f.read()
-
-    glb_b64 = base64.b64encode(glb_data).decode()
-
-    html_code = f"""
-    <model-viewer
-        alt="3D Model"
-        camera-controls
-        auto-rotate
-        style="width: 100%; height: 600px; background: #f0f0f0;">
-    </model-viewer>
-
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer/dist/model-viewer.min.js"></script>
-    <script>
-        const modelViewer = document.querySelector('model-viewer');
-        const glbData = atob('{glb_b64}');
-        const bytes = new Uint8Array(glbData.length);
-        for (let i = 0; i < glbData.length; i++) {{
-            bytes[i] = glbData.charCodeAt(i);
-        }}
-        const blob = new Blob([bytes], {{ type: 'model/gltf-binary' }});
-        const url = URL.createObjectURL(blob);
-        modelViewer.src = url;
-    </script>
-    """
-
-    st.components.v1.html(html_code, height=650)
+    """Render a simple success panel for generated GLB files."""
+    glb_file = Path(glb_path)
+    st.success("3D model generated")
+    st.write(f"Saved model file: {glb_file.name}")
 
 
 st.set_page_config(
@@ -286,53 +266,56 @@ def generate_3d_model_tripo(image_path):
         return ""
 
 
-st.title("RKstudio → 🖼️ Image → 🧊 3D Model Generator")
+def main():
+    st.title("RKstudio Image to 3D Model Generator")
+    st.caption("Safe mode: minimized workflow for reliable startup.")
 
-tab1, tab2 = st.tabs(["Image Generation", "3D Model Generation"])
+    with st.expander("Runtime status", expanded=True):
+        st.write("App initialized successfully.")
+        st.write(f"Python: {os.environ.get('PYTHON_VERSION', 'unknown')}")
 
-with tab1:
-    st.caption("Remember to check API usage!")
-    mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0)
-    prompt = st.text_area(
-        "Image prompt",
-        value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
-    )
+    tab1, tab2 = st.tabs(["Image", "3D Model"])
 
-    if st.button("Generate Image"):
-        with st.spinner("Generating image..."):
-            if mode == "Fast_Mode_OA":
-                image_path = generate_image_openai(prompt)
-            else:
-                image_path = generate_image_sdxl(prompt)
+    with tab1:
+        st.subheader("Step 1: Create or upload an image")
+        mode = st.selectbox("Image generation mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0)
+        prompt = st.text_area(
+            "Image prompt",
+            value="Simple toy model of a chicken on a plain studio background",
+        )
 
-            if image_path:
-                st.session_state["image_path"] = image_path
-                st.image(image_path, caption="Generated Image", width=400)
+        if st.button("Generate Image"):
+            with st.spinner("Generating image..."):
+                image_path = generate_image_openai(prompt) if mode == "Fast_Mode_OA" else generate_image_sdxl(prompt)
+                if image_path:
+                    st.session_state["image_path"] = image_path
+                    st.image(image_path, caption="Generated Image", width=400)
 
-with tab2:
-    st.caption("Remember to check API usage!")
-    mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0)
-    image_path = st.session_state.get("image_path")
+        uploaded = st.file_uploader("Or upload image", type=["png", "jpg", "jpeg"])
+        if uploaded:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp.write(uploaded.read())
+            tmp.close()
+            st.session_state["image_path"] = tmp.name
+            st.image(tmp.name, caption="Uploaded Image", width=400)
 
-    uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"])
-    if uploaded:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp.write(uploaded.read())
-        tmp.close()
-        image_path = tmp.name
+    with tab2:
+        st.subheader("Step 2: Convert image to 3D")
+        image_path = st.session_state.get("image_path")
+        if not image_path:
+            st.info("Generate or upload an image in Step 1 first.")
+            return
 
-    if not image_path:
-        st.warning("Please generate or upload an image first.")
-    else:
-        st.image(image_path, caption="Input Image", width=300)
+        st.image(image_path, caption="Input Image", width=320)
+        mode = st.selectbox("3D mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0)
 
-        if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
+        if mode == "Medium_Quality_Mode_STA":
             texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
             foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
             remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
             vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
 
-            if st.button("Generate 3D Model", key="generate_3d_stability"):
+            if st.button("Generate 3D Model"):
                 with st.spinner("Generating 3D model..."):
                     glb_path = generate_3d_model_stability(
                         image_path,
@@ -341,9 +324,7 @@ with tab2:
                         remesh,
                         vertex_count,
                     )
-
                     if glb_path:
-                        st.success("3D model generated!")
                         display_3d_model(glb_path)
                         with open(glb_path, "rb") as f:
                             st.download_button(
@@ -352,13 +333,11 @@ with tab2:
                                 file_name="model.glb",
                                 mime="model/gltf-binary",
                             )
-        elif mode in ["High_Quality_Mode_TRO", "High_Quality_Mode", "Tripo3D", "Fast_Mode"]:
-            if st.button("Generate 3D Model", key="generate_3d_tripo"):
+        else:
+            if st.button("Generate 3D Model"):
                 with st.spinner("Generating 3D model..."):
                     glb_path = generate_3d_model_tripo(image_path)
-
                     if glb_path:
-                        st.success("3D model generated!")
                         display_3d_model(glb_path)
                         with open(glb_path, "rb") as f:
                             st.download_button(
@@ -367,3 +346,10 @@ with tab2:
                                 file_name="model.glb",
                                 mime="model/gltf-binary",
                             )
+
+
+try:
+    main()
+except Exception:
+    st.error("Startup error detected. Details are shown below.")
+    st.exception(traceback.format_exc())

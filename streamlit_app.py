@@ -1,0 +1,500 @@
+import base64
+import os
+import tempfile
+import time
+import traceback
+
+import requests
+import streamlit as st
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+
+def get_api_key(key_name):
+    """Get API key from environment or Streamlit secrets."""
+    value = os.environ.get(key_name)
+    if value:
+        return value
+
+    try:
+        return st.secrets[key_name]
+    except Exception:
+        return None
+
+
+def display_3d_model(glb_path):
+    """Display a 3D GLB model using Google's model-viewer web component."""
+    with open(glb_path, "rb") as f:
+        glb_data = f.read()
+
+    glb_b64 = base64.b64encode(glb_data).decode()
+
+    html_code = f"""
+    <model-viewer
+        alt="3D Model"
+        camera-controls
+        auto-rotate
+        style="width: 100%; height: 600px; background: #f0f0f0;">
+    </model-viewer>
+
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer/dist/model-viewer.min.js"></script>
+    <script>
+        const modelViewer = document.querySelector('model-viewer');
+        const glbData = atob('{glb_b64}');
+        const bytes = new Uint8Array(glbData.length);
+        for (let i = 0; i < glbData.length; i++) {{
+            bytes[i] = glbData.charCodeAt(i);
+        }}
+        const blob = new Blob([bytes], {{ type: 'model/gltf-binary' }});
+        const url = URL.createObjectURL(blob);
+        modelViewer.src = url;
+    </script>
+    """
+
+    st.components.v1.html(html_code, height=650)
+
+
+st.set_page_config(
+    page_title="Image → 3D Generator",
+    layout="wide",
+    page_icon="🧊",
+    initial_sidebar_state="collapsed",
+)
+
+
+def setup_pwa():
+    """Setup PWA manifest and service worker."""
+    pwa_html = """
+    <script>
+    const safeDocument = () => {
+        try {
+            if (window.parent && window.parent !== window && window.parent.document) {
+                return window.parent.document;
+            }
+        } catch (err) {
+            // parent is inaccessible due to cross-origin or sandbox restrictions
+        }
+        return document;
+    };
+
+    const ensureHeadTag = (doc, tagName, attrs) => {
+        const selector = tagName + Object.entries(attrs)
+            .map(([key, value]) => `[${key}="${value}"]`)
+            .join('');
+
+        if (!doc.querySelector(selector)) {
+            const element = doc.createElement(tagName);
+            Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+            doc.head.appendChild(element);
+        }
+    };
+
+    const attachPwaMeta = () => {
+        const doc = safeDocument();
+        ensureHeadTag(doc, 'link', { rel: 'manifest', href: '/manifest.json' });
+        ensureHeadTag(doc, 'meta', { name: 'theme-color', content: '#ff4b4b' });
+        ensureHeadTag(doc, 'meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
+        ensureHeadTag(doc, 'meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'default' });
+        ensureHeadTag(doc, 'meta', { name: 'apple-mobile-web-app-title', content: '3D Generator' });
+        ensureHeadTag(doc, 'link', {
+            rel: 'apple-touch-icon',
+            href: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiIgdmlld0JveD0iMCAwIDE5MiAxOTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxOTIiIGhlaWdodD0iMTkyIiByeD0iMjQiIGZpbGw9IiNmZjRiNGIiLz4KPHBhdGggZD0iTTEyMCA2NGgzMnY2NGgtMzJ2LTY0ek0xMjggOTZ2MzJoLTE2di0zMmgxNnoiIGZpbGw9IndoaXRlIi8+Cjwvc3ZnPgo='
+        });
+    };
+
+    const registerServiceWorker = () => {
+        const targetWindow = (window.parent && window.parent !== window ? window.parent : window);
+        if (targetWindow.navigator && 'serviceWorker' in targetWindow.navigator) {
+            targetWindow.addEventListener('load', () => {
+                targetWindow.navigator.serviceWorker.register('/sw.js')
+                    .then(() => console.log('ServiceWorker registration successful'))
+                    .catch(err => console.log('ServiceWorker registration failed:', err));
+            });
+        }
+    };
+
+    let deferredPrompt;
+    const setupInstallPrompt = () => {
+        const targetWindow = (window.parent && window.parent !== window ? window.parent : window);
+        targetWindow.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            const installButton = document.getElementById('install-button');
+            if (installButton) {
+                installButton.style.display = 'block';
+            }
+        });
+    };
+
+    const bindInstallButton = () => {
+        const installButton = document.getElementById('install-button');
+        if (installButton) {
+            installButton.addEventListener('click', async () => {
+                if (!deferredPrompt) return;
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                deferredPrompt = null;
+                installButton.style.display = 'none';
+                console.log('Install prompt outcome:', outcome);
+            });
+        }
+    };
+
+    attachPwaMeta();
+    registerServiceWorker();
+    setupInstallPrompt();
+    bindInstallButton();
+    </script>
+    """
+
+    st.markdown(pwa_html, unsafe_allow_html=True)
+
+
+setup_pwa()
+
+
+def get_openai_client():
+    from openai import OpenAI
+
+    api_key = get_api_key("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not found in environment or secrets")
+    return OpenAI(api_key=api_key)
+
+
+def generate_image_openai(prompt: str) -> str:
+    try:
+        if not get_api_key("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY not found in environment or secrets")
+
+        client = get_openai_client()
+        response = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            n=1,
+            size="1024x1024",
+        )
+
+        image_item = response.data[0]
+        image_base64 = getattr(image_item, "b64_json", None)
+        image_url = getattr(image_item, "url", None)
+
+        if image_base64:
+            image_bytes = base64.b64decode(image_base64)
+        elif image_url:
+            image_bytes = requests.get(image_url, timeout=60).content
+        else:
+            raise Exception("OpenAI response did not include image data")
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(image_bytes)
+        tmp.close()
+
+        return tmp.name
+    except Exception as e:
+        st.error(f"Image generation failed: {e}")
+        traceback.print_exc()
+        return ""
+
+
+def generate_image_sdxl(prompt: str) -> str:
+    try:
+        hf_token = (
+            os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGINGFACE_API_KEY")
+            or os.environ.get("RKStudioHF1")
+        )
+        if not hf_token:
+            raise ValueError("Set HF_TOKEN, HUGGINGFACE_API_KEY, or RKStudioHF1 in your .env for SDXL mode")
+
+        api_url = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {
+            "Authorization": f"Bearer {hf_token}",
+            "Accept": "image/png",
+        }
+        payload = {"inputs": prompt}
+
+        response = requests.post(api_url, headers=headers, json=payload, timeout=180)
+        if response.status_code != 200:
+            raise Exception(f"Hugging Face SDXL request failed ({response.status_code}): {response.text}")
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(response.content)
+        tmp.close()
+        return tmp.name
+    except Exception as e:
+        st.error(f"SDXL image generation failed: {e}")
+        traceback.print_exc()
+        return ""
+
+
+def image_to_3d(host, image_path, **kwargs):
+    stability_key = get_api_key("STABILITY_KEY") or get_api_key("STABILITY_API_KEY")
+    if not stability_key:
+        raise ValueError("STABILITY_KEY/STABILITY_API_KEY not found in environment or secrets")
+
+    with open(image_path, "rb") as image_file:
+        response = requests.post(
+            host,
+            headers={
+                "Authorization": f"Bearer {stability_key}",
+                "Accept": "model/gltf-binary",
+            },
+            files={"image": image_file},
+            data=kwargs,
+            timeout=180,
+        )
+
+    if not response.ok:
+        detail = response.text
+        if response.status_code == 401:
+            raise Exception(f"Stability authentication failed (401). Check STABILITY key. Details: {detail}")
+        if response.status_code == 403:
+            raise Exception(
+                "Stability returned 403 (forbidden). Your API key likely does not have access to the Stable Fast 3D endpoint. "
+                f"Details: {detail}"
+            )
+        raise Exception(f"Stability request failed ({response.status_code}): {detail}")
+
+    return response.content
+
+
+def generate_3d_model_stability(image_path, texture_resolution, foreground_ratio, remesh, vertex_count):
+    try:
+        host = "https://api.stability.ai/v2beta/3d/stable-fast-3d"
+        glb_data = image_to_3d(
+            host=host,
+            image_path=image_path,
+            texture_resolution=texture_resolution,
+            foreground_ratio=foreground_ratio,
+            remesh=remesh,
+            vertex_count=vertex_count,
+        )
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+        tmp.write(glb_data)
+        tmp.close()
+
+        return tmp.name
+    except Exception as e:
+        st.error(f"3D generation failed: {e}")
+        traceback.print_exc()
+        return ""
+
+
+def upload_image_to_tripo3d(image_path: str, api_key: str) -> str:
+    upload_url = "https://api.tripo3d.ai/v2/openapi/upload/sts"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    file_extension = os.path.splitext(image_path)[1].lstrip('.').lower()
+    mime_type = f"image/{file_extension}" if file_extension in ["jpeg", "jpg", "png"] else "application/octet-stream"
+
+    with open(image_path, "rb") as image_file:
+        files = {"file": (os.path.basename(image_path), image_file, mime_type)}
+        response = requests.post(upload_url, headers=headers, files=files, timeout=60)
+
+    response.raise_for_status()
+    response_json = response.json()
+    file_token = response_json.get("data", {}).get("image_token")
+    if not file_token:
+        raise Exception(f"Could not find image_token in upload response: {response_json}")
+    return file_token
+
+
+def create_tripo3d_task(file_token: str, image_path: str, api_key: str) -> str:
+    generation_url = "https://api.tripo3d.ai/v2/openapi/task"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    file_extension = os.path.splitext(image_path)[1].lstrip('.').lower()
+    data = {
+        "type": "image_to_model",
+        "file": {
+            "type": file_extension,
+            "file_token": file_token,
+        },
+    }
+
+    response = requests.post(generation_url, headers=headers, json=data, timeout=60)
+    response.raise_for_status()
+    response_json = response.json()
+    task_id = response_json.get("data", {}).get("task_id")
+    if not task_id:
+        raise Exception(f"Could not find task_id in task response: {response_json}")
+    return task_id
+
+
+def poll_tripo3d_task(task_id: str, api_key: str, timeout_seconds: int = 300, interval_seconds: int = 5) -> dict:
+    status_url = f"https://api.tripo3d.ai/v2/openapi/task/{task_id}"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    start_time = time.time()
+    while time.time() - start_time < timeout_seconds:
+        response = requests.get(status_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+
+        status = payload.get("data", {}).get("status", "").lower()
+        if status in {"succeeded", "success", "completed", "done"}:
+            return payload
+        if status in {"failed", "error", "cancelled"}:
+            raise Exception(f"Tripo3D task failed: {payload}")
+
+        time.sleep(interval_seconds)
+
+    raise TimeoutError("Timed out waiting for Tripo3D task completion")
+
+
+def generate_3d_model_tripo(image_path):
+    try:
+        api_key = os.environ.get("TRIPO3D_API_KEY") or os.environ.get("RKStudioTripo")
+        if not api_key:
+            raise ValueError("Set TRIPO3D_API_KEY or RKStudioTripo in your .env")
+
+        file_token = upload_image_to_tripo3d(image_path, api_key)
+        task_id = create_tripo3d_task(file_token, image_path, api_key)
+        final_payload = poll_tripo3d_task(task_id, api_key)
+
+        download_url = final_payload.get("data", {}).get("output", {}).get("pbr_model")
+        if not download_url:
+            raise Exception(f"Failed to retrieve download URL from Tripo3D response: {final_payload}")
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+        with requests.get(download_url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            for chunk in r.iter_content(chunk_size=8192):
+                tmp.write(chunk)
+        tmp.close()
+
+        return tmp.name
+    except Exception as e:
+        st.error(f"Tripo3D model generation failed: {e}")
+        traceback.print_exc()
+        return ""
+
+
+st.title("RKstudio → 🖼️ Image → 🧊 3D Model Generator")
+
+install_button_html = """
+<div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
+    <button id="install-button" style="
+        background: #ff4b4b;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        display: none;
+    ">
+        📱 Install App
+    </button>
+</div>
+
+<script>
+const installButton = document.getElementById('install-button');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.deferredPrompt = e;
+    installButton.style.display = 'block';
+});
+
+installButton.addEventListener('click', async () => {
+    const promptEvent = window.deferredPrompt;
+    if (!promptEvent) return;
+
+    promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
+
+    window.deferredPrompt = null;
+    installButton.style.display = 'none';
+});
+</script>
+"""
+
+st.markdown(install_button_html, unsafe_allow_html=True)
+
+tab1, tab2 = st.tabs(["Image Generation", "3D Model Generation"])
+
+with tab1:
+    st.caption("Remember to check API usage!")
+    mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0)
+    prompt = st.text_area(
+        "Image prompt",
+        value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
+    )
+
+    if st.button("Generate Image"):
+        with st.spinner("Generating image..."):
+            if mode == "Fast_Mode_OA":
+                image_path = generate_image_openai(prompt)
+            else:
+                image_path = generate_image_sdxl(prompt)
+
+            if image_path:
+                st.session_state["image_path"] = image_path
+                st.image(image_path, caption="Generated Image", width=400)
+
+with tab2:
+    st.caption("Remember to check API usage!")
+    mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0)
+    image_path = st.session_state.get("image_path")
+
+    uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"])
+    if uploaded:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(uploaded.read())
+        tmp.close()
+        image_path = tmp.name
+
+    if not image_path:
+        st.warning("Please generate or upload an image first.")
+    else:
+        st.image(image_path, caption="Input Image", width=300)
+
+        if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
+            texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
+            foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
+            remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
+            vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
+
+            if st.button("Generate 3D Model", key="generate_3d_stability"):
+                with st.spinner("Generating 3D model..."):
+                    glb_path = generate_3d_model_stability(
+                        image_path,
+                        texture_resolution,
+                        foreground_ratio,
+                        remesh,
+                        vertex_count,
+                    )
+
+                    if glb_path:
+                        st.success("3D model generated!")
+                        display_3d_model(glb_path)
+                        with open(glb_path, "rb") as f:
+                            st.download_button(
+                                "Download GLB",
+                                f,
+                                file_name="model.glb",
+                                mime="model/gltf-binary",
+                            )
+        elif mode in ["High_Quality_Mode_TRO", "High_Quality_Mode", "Tripo3D", "Fast_Mode"]:
+            if st.button("Generate 3D Model", key="generate_3d_tripo"):
+                with st.spinner("Generating 3D model..."):
+                    glb_path = generate_3d_model_tripo(image_path)
+
+                    if glb_path:
+                        st.success("3D model generated!")
+                        display_3d_model(glb_path)
+                        with open(glb_path, "rb") as f:
+                            st.download_button(
+                                "Download GLB",
+                                f,
+                                file_name="model.glb",
+                                mime="model/gltf-binary",
+                            )

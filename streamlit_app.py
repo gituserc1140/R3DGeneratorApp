@@ -19,6 +19,17 @@ except Exception:
 load_dotenv()
 
 
+def _normalize_api_key(value):
+    """Normalize key values pasted from dashboards or env files."""
+    if not isinstance(value, str):
+        return value
+
+    normalized = value.strip().strip('"').strip("'")
+    if normalized.lower().startswith("bearer "):
+        normalized = normalized[7:].strip()
+    return normalized
+
+
 def _lookup_key_recursive(container, key_name):
     """Recursively find a key in nested mappings."""
     if not isinstance(container, Mapping):
@@ -42,24 +53,24 @@ def get_api_key(key_name):
     """Get API key from environment or Streamlit secrets."""
     runtime_keys = st.session_state.get("runtime_api_keys", {})
     if key_name in runtime_keys and runtime_keys[key_name]:
-        return runtime_keys[key_name]
+        return _normalize_api_key(runtime_keys[key_name])
 
     lowered = key_name.lower()
     if lowered in runtime_keys and runtime_keys[lowered]:
-        return runtime_keys[lowered]
+        return _normalize_api_key(runtime_keys[lowered])
 
     value = os.environ.get(key_name)
     if value:
-        return value
+        return _normalize_api_key(value)
 
     # Common fallback for lowercase env var naming.
     value = os.environ.get(lowered)
     if value:
-        return value
+        return _normalize_api_key(value)
 
     try:
         secrets_dict = st.secrets.to_dict() if hasattr(st.secrets, "to_dict") else dict(st.secrets)
-        return _lookup_key_recursive(secrets_dict, key_name)
+        return _normalize_api_key(_lookup_key_recursive(secrets_dict, key_name))
     except Exception:
         return None
 

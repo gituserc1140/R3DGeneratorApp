@@ -24,10 +24,40 @@ def get_api_key(key_name):
     if value:
         return value
 
+    # Common fallback for lowercase env var naming.
+    value = os.environ.get(key_name.lower())
+    if value:
+        return value
+
     try:
-        return st.secrets[key_name]
+        secrets_dict = st.secrets.to_dict() if hasattr(st.secrets, "to_dict") else dict(st.secrets)
+        if key_name in secrets_dict:
+            return secrets_dict[key_name]
+
+        lowered = key_name.lower()
+        if lowered in secrets_dict:
+            return secrets_dict[lowered]
+
+        # Also support sectioned secrets like [api_keys] OPENAI_API_KEY="..."
+        for section in secrets_dict.values():
+            if isinstance(section, dict):
+                if key_name in section:
+                    return section[key_name]
+                if lowered in section:
+                    return section[lowered]
+
+        return None
     except Exception:
         return None
+
+
+def get_first_available_key(*key_names):
+    """Return the first non-empty key value from the provided key names."""
+    for key_name in key_names:
+        value = get_api_key(key_name)
+        if value:
+            return value
+    return None
 
 
 def display_3d_model(glb_path):
@@ -48,16 +78,16 @@ st.set_page_config(
 def get_openai_client():
     from openai import OpenAI
 
-    api_key = get_api_key("OPENAI_API_KEY")
+    api_key = get_first_available_key("OPENAI_API_KEY", "OPENAI_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY not found in environment or secrets")
+        raise ValueError("OpenAI key not found. Add OPENAI_API_KEY to Streamlit secrets.")
     return OpenAI(api_key=api_key)
 
 
 def generate_image_openai(prompt: str) -> str:
     try:
-        if not get_api_key("OPENAI_API_KEY"):
-            raise ValueError("OPENAI_API_KEY not found in environment or secrets")
+        if not get_first_available_key("OPENAI_API_KEY", "OPENAI_KEY"):
+            raise ValueError("OpenAI key not found. Add OPENAI_API_KEY to Streamlit secrets.")
 
         client = get_openai_client()
         response = client.images.generate(
@@ -91,13 +121,9 @@ def generate_image_openai(prompt: str) -> str:
 
 def generate_image_sdxl(prompt: str) -> str:
     try:
-        hf_token = (
-            os.environ.get("HF_TOKEN")
-            or os.environ.get("HUGGINGFACE_API_KEY")
-            or os.environ.get("RKStudioHF1")
-        )
+        hf_token = get_first_available_key("HF_TOKEN", "HUGGINGFACE_API_KEY", "RKStudioHF1")
         if not hf_token:
-            raise ValueError("Set HF_TOKEN, HUGGINGFACE_API_KEY, or RKStudioHF1 in your .env for SDXL mode")
+            raise ValueError("Set HF_TOKEN (or HUGGINGFACE_API_KEY / RKStudioHF1) in Streamlit secrets.")
 
         api_url = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {
@@ -241,9 +267,9 @@ def poll_tripo3d_task(task_id: str, api_key: str, timeout_seconds: int = 300, in
 
 def generate_3d_model_tripo(image_path):
     try:
-        api_key = os.environ.get("TRIPO3D_API_KEY") or os.environ.get("RKStudioTripo")
+        api_key = get_first_available_key("TRIPO3D_API_KEY", "RKStudioTripo")
         if not api_key:
-            raise ValueError("Set TRIPO3D_API_KEY or RKStudioTripo in your .env")
+            raise ValueError("Set TRIPO3D_API_KEY (or RKStudioTripo) in Streamlit secrets.")
 
         file_token = upload_image_to_tripo3d(image_path, api_key)
         task_id = create_tripo3d_task(file_token, image_path, api_key)

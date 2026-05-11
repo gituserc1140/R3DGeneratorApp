@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import traceback
+from collections.abc import Mapping
 from pathlib import Path
 
 import requests
@@ -40,7 +41,7 @@ def get_api_key(key_name):
 
         # Also support sectioned secrets like [api_keys] OPENAI_API_KEY="..."
         for section in secrets_dict.values():
-            if isinstance(section, dict):
+            if isinstance(section, Mapping):
                 if key_name in section:
                     return section[key_name]
                 if lowered in section:
@@ -58,6 +59,11 @@ def get_first_available_key(*key_names):
         if value:
             return value
     return None
+
+
+def has_any_key(*key_names):
+    """Return True if any key name resolves from env/secrets."""
+    return get_first_available_key(*key_names) is not None
 
 
 def display_3d_model(glb_path):
@@ -300,6 +306,19 @@ def main():
     with st.expander("Runtime status", expanded=True):
         st.write("App initialized successfully.")
         st.write(f"Python: {os.environ.get('PYTHON_VERSION', 'unknown')}")
+
+    # Safe diagnostics: only indicates presence/absence of required keys.
+    with st.expander("API key diagnostics (safe)", expanded=True):
+        openai_ready = has_any_key("OPENAI_API_KEY", "OPENAI_KEY")
+        sdxl_ready = has_any_key("HF_TOKEN", "HUGGINGFACE_API_KEY", "RKStudioHF1")
+        stability_ready = has_any_key("STABILITY_KEY", "STABILITY_API_KEY")
+        tripo_ready = has_any_key("TRIPO3D_API_KEY", "RKStudioTripo")
+
+        st.write(f"OpenAI key detected: {'yes' if openai_ready else 'no'}")
+        st.write(f"SDXL key detected: {'yes' if sdxl_ready else 'no'}")
+        st.write(f"Stability key detected: {'yes' if stability_ready else 'no'}")
+        st.write(f"Tripo key detected: {'yes' if tripo_ready else 'no'}")
+        st.caption("Only key presence is shown. Secret values are never displayed.")
 
     tab1, tab2 = st.tabs(["Image", "3D Model"])
 

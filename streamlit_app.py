@@ -373,9 +373,14 @@ def main():
                                 )
 
 
-try:
-    main()
-except Exception as exc:
-    st.error("Startup error detected. Details are shown below.")
-    st.exception(exc)
-    st.code(traceback.format_exc())
+def run_app():
+    try:
+        main()
+    except Exception as exc:
+        st.error("Startup error detected. Details are shown below.")
+        st.exception(exc)
+        st.code(traceback.format_exc())
+
+
+if __name__ == "__main__":
+    run_app()

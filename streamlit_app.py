@@ -19,6 +19,25 @@ except Exception:
 load_dotenv()
 
 
+def _lookup_key_recursive(container, key_name):
+    """Recursively find a key in nested mappings."""
+    if not isinstance(container, Mapping):
+        return None
+
+    lowered = key_name.lower()
+    if key_name in container and container[key_name]:
+        return container[key_name]
+    if lowered in container and container[lowered]:
+        return container[lowered]
+
+    for value in container.values():
+        if isinstance(value, Mapping):
+            found = _lookup_key_recursive(value, key_name)
+            if found:
+                return found
+    return None
+
+
 def get_api_key(key_name):
     """Get API key from environment or Streamlit secrets."""
     runtime_keys = st.session_state.get("runtime_api_keys", {})
@@ -40,21 +59,7 @@ def get_api_key(key_name):
 
     try:
         secrets_dict = st.secrets.to_dict() if hasattr(st.secrets, "to_dict") else dict(st.secrets)
-        if key_name in secrets_dict:
-            return secrets_dict[key_name]
-
-        if lowered in secrets_dict:
-            return secrets_dict[lowered]
-
-        # Also support sectioned secrets like [api_keys] OPENAI_API_KEY="..."
-        for section in secrets_dict.values():
-            if isinstance(section, Mapping):
-                if key_name in section:
-                    return section[key_name]
-                if lowered in section:
-                    return section[lowered]
-
-        return None
+        return _lookup_key_recursive(secrets_dict, key_name)
     except Exception:
         return None
 

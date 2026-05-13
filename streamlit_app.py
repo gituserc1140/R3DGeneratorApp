@@ -4,6 +4,7 @@ import time
 import traceback
 import io
 import math
+import base64
 
 import plotly.graph_objects as go
 import requests
@@ -265,14 +266,6 @@ def get_session_glb_path():
     return tmp.name
 
 
-st.set_page_config(
-    page_title="Image → 3D Generator",
-    layout="wide",
-    page_icon="🧊",
-    initial_sidebar_state="collapsed",
-)
-
-
 def setup_pwa():
     """Setup PWA manifest and service worker."""
     pwa_html = """
@@ -363,8 +356,180 @@ def setup_pwa():
 
     st.markdown(pwa_html, unsafe_allow_html=True)
 
+def run_app():
+    st.set_page_config(
+        page_title="Image → 3D Generator",
+        layout="wide",
+        page_icon="🧊",
+        initial_sidebar_state="collapsed",
+    )
 
-setup_pwa()
+    setup_pwa()
+
+    st.title("RKstudio → 🖼️ Image → 🧊 3D Model Generator")
+
+    install_button_html = """
+<div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
+    <button id="install-button" style="
+        background: #ff4b4b;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        display: none;
+    ">
+        📱 Install App
+    </button>
+</div>
+
+<script>
+const installButton = document.getElementById('install-button');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.deferredPrompt = e;
+    installButton.style.display = 'block';
+});
+
+installButton.addEventListener('click', async () => {
+    const promptEvent = window.deferredPrompt;
+    if (!promptEvent) return;
+
+    promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
+
+    window.deferredPrompt = null;
+    installButton.style.display = 'none';
+});
+</script>
+"""
+
+    st.markdown(install_button_html, unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer"])
+
+    with tab1:
+        st.caption("Remember to check API usage!")
+        mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0, key="image_mode_select")
+        prompt = st.text_area(
+            "Image prompt",
+            value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
+        )
+
+        if st.button("Generate Image"):
+            with st.spinner("Generating image..."):
+                if mode == "Fast_Mode_OA":
+                    image_path = generate_image_openai(prompt)
+                else:
+                    image_path = generate_image_sdxl(prompt)
+
+                if image_path:
+                    st.session_state["image_path"] = image_path
+                    st.image(image_path, caption="Generated Image", width=400)
+
+    with tab2:
+        st.caption("Remember to check API usage!")
+        mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0, key="model_mode_select")
+        image_path = st.session_state.get("image_path")
+
+        uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"])
+        if uploaded:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp.write(uploaded.read())
+            tmp.close()
+            image_path = tmp.name
+
+        if not image_path:
+            st.warning("Please generate or upload an image first.")
+        else:
+            st.image(image_path, caption="Input Image", width=300)
+
+            if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
+                texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
+                foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
+                remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
+                vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
+
+                if st.button("Generate 3D Model", key="generate_3d_stability"):
+                    with st.spinner("Generating 3D model..."):
+                        glb_path = generate_3d_model_stability(
+                            image_path,
+                            texture_resolution,
+                            foreground_ratio,
+                            remesh,
+                            vertex_count,
+                        )
+
+                        if glb_path:
+                            persist_glb_in_session(glb_path)
+                            st.success("3D model generated!")
+                            with open(glb_path, "rb") as f:
+                                st.download_button(
+                                    "Download GLB",
+                                    f,
+                                    file_name="model.glb",
+                                    mime="model/gltf-binary",
+                                )
+            elif mode in ["High_Quality_Mode_TRO", "High_Quality_Mode", "Tripo3D", "Fast_Mode"]:
+                if st.button("Generate 3D Model", key="generate_3d_tripo"):
+                    with st.spinner("Generating 3D model..."):
+                        glb_path = generate_3d_model_tripo(image_path)
+
+                        if glb_path:
+                            persist_glb_in_session(glb_path)
+                            st.success("3D model generated!")
+                            with open(glb_path, "rb") as f:
+                                st.download_button(
+                                    "Download GLB",
+                                    f,
+                                    file_name="model.glb",
+                                    mime="model/gltf-binary",
+                                )
+
+            current_glb_path = get_session_glb_path()
+            if current_glb_path and os.path.exists(current_glb_path):
+                snapshot_png = st.session_state.get("glb_preview_png")
+                if snapshot_png:
+                    st.subheader("Model Image Preview")
+                    st.image(snapshot_png, caption="Snapshot of generated GLB", use_container_width=True)
+                st.subheader("Current 3D Preview")
+                restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
+                st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
+                display_3d_model(current_glb_path)
+            elif st.session_state.get("glb_bytes"):
+                st.info("GLB exists in session but could not be restored to disk for preview.")
+
+    with tab3:
+        st.caption("Preview an existing GLB file or inspect the most recently generated model.")
+        viewer_upload = st.file_uploader("Upload a GLB file", type=["glb"], key="viewer_glb_upload")
+
+        if viewer_upload:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+            tmp.write(viewer_upload.read())
+            tmp.close()
+            persist_glb_in_session(tmp.name)
+
+        current_glb_path = get_session_glb_path()
+        if current_glb_path and os.path.exists(current_glb_path):
+            snapshot_png = st.session_state.get("glb_preview_png")
+            if snapshot_png:
+                st.subheader("Model Image Preview")
+                st.image(snapshot_png, caption="Snapshot of selected GLB", use_container_width=True)
+            restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
+            st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
+            display_3d_model(current_glb_path)
+            with open(current_glb_path, "rb") as f:
+                st.download_button(
+                    "Download Current GLB",
+                    f,
+                    file_name=st.session_state.get("glb_name", os.path.basename(current_glb_path)),
+                    mime="model/gltf-binary",
+                    key="download_current_glb",
+                )
+        else:
+            st.info("Upload a .glb file here or generate one in the 3D Model Generation tab.")
 
 
 def get_openai_client():
@@ -589,168 +754,5 @@ def generate_3d_model_tripo(image_path):
         return ""
 
 
-st.title("RKstudio → 🖼️ Image → 🧊 3D Model Generator")
-
-install_button_html = """
-<div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
-    <button id="install-button" style="
-        background: #ff4b4b;
-        color: white;
-        border: none;
-        padding: 10px 15px;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 14px;
-        display: none;
-    ">
-        📱 Install App
-    </button>
-</div>
-
-<script>
-const installButton = document.getElementById('install-button');
-
-window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    window.deferredPrompt = e;
-    installButton.style.display = 'block';
-});
-
-installButton.addEventListener('click', async () => {
-    const promptEvent = window.deferredPrompt;
-    if (!promptEvent) return;
-
-    promptEvent.prompt();
-    const { outcome } = await promptEvent.userChoice;
-
-    window.deferredPrompt = null;
-    installButton.style.display = 'none';
-});
-</script>
-"""
-
-st.markdown(install_button_html, unsafe_allow_html=True)
-
-tab1, tab2, tab3 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer"])
-
-with tab1:
-    st.caption("Remember to check API usage!")
-    mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0)
-    prompt = st.text_area(
-        "Image prompt",
-        value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
-    )
-
-    if st.button("Generate Image"):
-        with st.spinner("Generating image..."):
-            if mode == "Fast_Mode_OA":
-                image_path = generate_image_openai(prompt)
-            else:
-                image_path = generate_image_sdxl(prompt)
-
-            if image_path:
-                st.session_state["image_path"] = image_path
-                st.image(image_path, caption="Generated Image", width=400)
-
-with tab2:
-    st.caption("Remember to check API usage!")
-    mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0)
-    image_path = st.session_state.get("image_path")
-    current_glb_path = st.session_state.get("glb_path")
-
-    uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"])
-    if uploaded:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp.write(uploaded.read())
-        tmp.close()
-        image_path = tmp.name
-
-    if not image_path:
-        st.warning("Please generate or upload an image first.")
-    else:
-        st.image(image_path, caption="Input Image", width=300)
-
-        if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
-            texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
-            foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
-            remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
-            vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
-
-            if st.button("Generate 3D Model", key="generate_3d_stability"):
-                with st.spinner("Generating 3D model..."):
-                    glb_path = generate_3d_model_stability(
-                        image_path,
-                        texture_resolution,
-                        foreground_ratio,
-                        remesh,
-                        vertex_count,
-                    )
-
-                    if glb_path:
-                        persist_glb_in_session(glb_path)
-                        st.success("3D model generated!")
-                        with open(glb_path, "rb") as f:
-                            st.download_button(
-                                "Download GLB",
-                                f,
-                                file_name="model.glb",
-                                mime="model/gltf-binary",
-                            )
-        elif mode in ["High_Quality_Mode_TRO", "High_Quality_Mode", "Tripo3D", "Fast_Mode"]:
-            if st.button("Generate 3D Model", key="generate_3d_tripo"):
-                with st.spinner("Generating 3D model..."):
-                    glb_path = generate_3d_model_tripo(image_path)
-
-                    if glb_path:
-                        persist_glb_in_session(glb_path)
-                        st.success("3D model generated!")
-                        with open(glb_path, "rb") as f:
-                            st.download_button(
-                                "Download GLB",
-                                f,
-                                file_name="model.glb",
-                                mime="model/gltf-binary",
-                            )
-
-        current_glb_path = get_session_glb_path()
-        if current_glb_path and os.path.exists(current_glb_path):
-            snapshot_png = st.session_state.get("glb_preview_png")
-            if snapshot_png:
-                st.subheader("Model Image Preview")
-                st.image(snapshot_png, caption="Snapshot of generated GLB", use_container_width=True)
-            st.subheader("Current 3D Preview")
-            restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
-            st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
-            display_3d_model(current_glb_path)
-        elif st.session_state.get("glb_bytes"):
-            st.info("GLB exists in session but could not be restored to disk for preview.")
-
-with tab3:
-    st.caption("Preview an existing GLB file or inspect the most recently generated model.")
-    viewer_upload = st.file_uploader("Upload a GLB file", type=["glb"], key="viewer_glb_upload")
-
-    if viewer_upload:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
-        tmp.write(viewer_upload.read())
-        tmp.close()
-        persist_glb_in_session(tmp.name)
-
-    current_glb_path = get_session_glb_path()
-    if current_glb_path and os.path.exists(current_glb_path):
-        snapshot_png = st.session_state.get("glb_preview_png")
-        if snapshot_png:
-            st.subheader("Model Image Preview")
-            st.image(snapshot_png, caption="Snapshot of selected GLB", use_container_width=True)
-        restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
-        st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
-        display_3d_model(current_glb_path)
-        with open(current_glb_path, "rb") as f:
-            st.download_button(
-                "Download Current GLB",
-                f,
-                file_name=st.session_state.get("glb_name", os.path.basename(current_glb_path)),
-                mime="model/gltf-binary",
-                key="download_current_glb",
-            )
-    else:
-        st.info("Upload a .glb file here or generate one in the 3D Model Generation tab.")
+if __name__ == "__main__":
+    run_app()

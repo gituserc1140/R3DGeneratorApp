@@ -1,6 +1,4 @@
-import importlib
-
-import streamlit_app
+from streamlit_app import run_app
 
 
-importlib.reload(streamlit_app)
+run_app()

@@ -214,7 +214,7 @@ def build_plotly_figure(glb_path):
     return figure
 
 
-def display_3d_model(glb_path):
+def display_3d_model(glb_path, chart_key=None):
     """Display a 3D GLB model using Plotly as a browser-safe fallback."""
     st.caption(f"Viewing: {os.path.basename(glb_path)}")
     try:
@@ -230,7 +230,7 @@ def display_3d_model(glb_path):
         return
 
     show_preview_mode_badge("Interactive")
-    st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False})
+    st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False}, key=chart_key)
 
 
 def persist_glb_in_session(glb_path):
@@ -497,7 +497,7 @@ installButton.addEventListener('click', async () => {
                 st.subheader("Current 3D Preview")
                 restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
                 st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
-                display_3d_model(current_glb_path)
+                display_3d_model(current_glb_path, chart_key="tab2_plotly_preview")
             elif st.session_state.get("glb_bytes"):
                 st.info("GLB exists in session but could not be restored to disk for preview.")
 
@@ -519,7 +519,7 @@ installButton.addEventListener('click', async () => {
                 st.image(snapshot_png, caption="Snapshot of selected GLB", use_container_width=True)
             restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
             st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
-            display_3d_model(current_glb_path)
+            display_3d_model(current_glb_path, chart_key="tab3_plotly_preview")
             with open(current_glb_path, "rb") as f:
                 st.download_button(
                     "Download Current GLB",

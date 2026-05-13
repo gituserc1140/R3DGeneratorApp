@@ -1,99 +1,268 @@
-import base64
 import os
 import tempfile
 import time
 import traceback
-from collections.abc import Mapping
-from pathlib import Path
+import io
+import math
 
+import plotly.graph_objects as go
 import requests
 import streamlit as st
-
-try:
-    from dotenv import load_dotenv
-except Exception:
-    def load_dotenv():
-        return False
+import trimesh
+from dotenv import load_dotenv
+from PIL import Image, ImageDraw
 
 
 load_dotenv()
 
 
-def _normalize_api_key(value):
-    """Normalize key values pasted from dashboards or env files."""
-    if not isinstance(value, str):
-        return value
-
-    normalized = value.strip().strip('"').strip("'")
-    if normalized.lower().startswith("bearer "):
-        normalized = normalized[7:].strip()
-    return normalized
-
-
-def _lookup_key_recursive(container, key_name):
-    """Recursively find a key in nested mappings."""
-    if not isinstance(container, Mapping):
-        return None
-
-    lowered = key_name.lower()
-    if key_name in container and container[key_name]:
-        return container[key_name]
-    if lowered in container and container[lowered]:
-        return container[lowered]
-
-    for value in container.values():
-        if isinstance(value, Mapping):
-            found = _lookup_key_recursive(value, key_name)
-            if found:
-                return found
-    return None
-
-
 def get_api_key(key_name):
     """Get API key from environment or Streamlit secrets."""
-    runtime_keys = st.session_state.get("runtime_api_keys", {})
-    if key_name in runtime_keys and runtime_keys[key_name]:
-        return _normalize_api_key(runtime_keys[key_name])
-
-    lowered = key_name.lower()
-    if lowered in runtime_keys and runtime_keys[lowered]:
-        return _normalize_api_key(runtime_keys[lowered])
-
     value = os.environ.get(key_name)
     if value:
-        return _normalize_api_key(value)
-
-    # Common fallback for lowercase env var naming.
-    value = os.environ.get(lowered)
-    if value:
-        return _normalize_api_key(value)
+        return value
 
     try:
-        secrets_dict = st.secrets.to_dict() if hasattr(st.secrets, "to_dict") else dict(st.secrets)
-        return _normalize_api_key(_lookup_key_recursive(secrets_dict, key_name))
+        return st.secrets[key_name]
     except Exception:
         return None
 
 
-def get_first_available_key(*key_names):
-    """Return the first non-empty key value from the provided key names."""
-    for key_name in key_names:
-        value = get_api_key(key_name)
-        if value:
-            return value
-    return None
+def _project_point_iso(point):
+    """Project a 3D point into a 2D isometric-like view."""
+    x, y, z = point
+    cos_30 = math.sqrt(3) / 2
+    sin_30 = 0.5
+    return ((x - y) * cos_30, (x + y) * sin_30 - z)
 
 
-def has_any_key(*key_names):
-    """Return True if any key name resolves from env/secrets."""
-    return get_first_available_key(*key_names) is not None
+def build_static_snapshot(glb_path, note=""):
+    """Render a static PNG snapshot from mesh vertices when triangulation fails."""
+    width, height = 960, 640
+    image = Image.new("RGB", (width, height), "#eef2ff")
+    draw = ImageDraw.Draw(image)
+
+    loaded = trimesh.load(glb_path, force="scene")
+    meshes = loaded.dump(concatenate=False) if isinstance(loaded, trimesh.Scene) else [loaded]
+
+    points = []
+    for mesh in meshes:
+        if not isinstance(mesh, trimesh.Trimesh):
+            continue
+        vertices = getattr(mesh, "vertices", None)
+        if vertices is None or len(vertices) == 0:
+            continue
+
+        sample_step = max(1, len(vertices) // 2500)
+        for point in vertices[::sample_step]:
+            points.append(point)
+
+    if not points:
+        draw.rectangle((28, 28, width - 28, height - 28), outline="#94a3b8", width=2)
+        draw.text((44, 44), "Static snapshot unavailable", fill="#0f172a")
+        if note:
+            draw.text((44, 74), f"Reason: {note[:120]}", fill="#334155")
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    projected = [_project_point_iso(point) for point in points]
+    xs = [pt[0] for pt in projected]
+    ys = [pt[1] for pt in projected]
+
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    dx = max(max_x - min_x, 1e-9)
+    dy = max(max_y - min_y, 1e-9)
+
+    margin = 56
+    sx = (width - (2 * margin)) / dx
+    sy = (height - (2 * margin)) / dy
+    scale = min(sx, sy)
+
+    draw.rectangle((24, 24, width - 24, height - 24), outline="#94a3b8", width=2)
+    for x, y in projected:
+        px = margin + (x - min_x) * scale
+        py = margin + (y - min_y) * scale
+        draw.ellipse((px - 1, py - 1, px + 1, py + 1), fill="#0f172a")
+
+    draw.text((36, 34), "Static snapshot fallback", fill="#0f172a")
+    if note:
+        draw.text((36, 58), f"Reason: {note[:120]}", fill="#334155")
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def build_placeholder_snapshot(note=""):
+    """Return a simple placeholder PNG when model snapshot generation fails."""
+    width, height = 960, 640
+    image = Image.new("RGB", (width, height), "#f8fafc")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((24, 24, width - 24, height - 24), outline="#94a3b8", width=2)
+    draw.text((40, 44), "Model image preview unavailable", fill="#0f172a")
+    if note:
+        draw.text((40, 74), f"Reason: {note[:120]}", fill="#334155")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def update_snapshot_preview(glb_path):
+    """Store a PNG snapshot preview in session for reliable display."""
+    try:
+        st.session_state["glb_preview_png"] = build_static_snapshot(glb_path)
+        st.session_state["glb_preview_error"] = ""
+    except Exception as exc:
+        st.session_state["glb_preview_png"] = build_placeholder_snapshot(str(exc))
+        st.session_state["glb_preview_error"] = str(exc)
+
+
+def show_preview_mode_badge(mode):
+    """Display a compact badge indicating the active preview mode."""
+    palette = {
+        "Interactive": ("#166534", "#dcfce7", "#bbf7d0"),
+        "Static": ("#7c2d12", "#ffedd5", "#fed7aa"),
+    }
+    text_color, bg_color, border_color = palette.get(mode, ("#0f172a", "#e2e8f0", "#cbd5e1"))
+    st.markdown(
+        (
+            f"<div style='display:inline-block;padding:0.15rem 0.55rem;border-radius:999px;"
+            f"font-size:0.78rem;font-weight:600;color:{text_color};background:{bg_color};"
+            f"border:1px solid {border_color};margin-bottom:0.35rem;'>"
+            f"Preview: {mode}</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def build_plotly_figure(glb_path):
+    """Build a Plotly mesh figure from a GLB file."""
+    loaded = trimesh.load(glb_path, force="scene")
+    meshes = loaded.dump(concatenate=False) if isinstance(loaded, trimesh.Scene) else [loaded]
+
+    figure = go.Figure()
+    has_geometry = False
+    failed_meshes = 0
+
+    for mesh in meshes:
+        if not isinstance(mesh, trimesh.Trimesh) or mesh.faces is None or len(mesh.faces) == 0:
+            continue
+
+        try:
+            triangles = mesh.triangles
+            if triangles is None or len(triangles) == 0:
+                failed_meshes += 1
+                continue
+            vertices = triangles.reshape((-1, 3))
+            face_count = len(triangles)
+            faces = [(idx, idx + 1, idx + 2) for idx in range(0, face_count * 3, 3)]
+        except Exception:
+            failed_meshes += 1
+            continue
+
+        i = [item[0] for item in faces]
+        j = [item[1] for item in faces]
+        k = [item[2] for item in faces]
+        color = "#ff6b6b"
+        visual = getattr(mesh, "visual", None)
+        material = getattr(visual, "material", None) if visual is not None else None
+        base_color = getattr(material, "baseColorFactor", None)
+        if base_color and len(base_color) >= 3:
+            rgb = tuple(int(channel) for channel in base_color[:3])
+            color = f"rgb({rgb[0]},{rgb[1]},{rgb[2]})"
+
+        figure.add_trace(
+            go.Mesh3d(
+                x=vertices[:, 0],
+                y=vertices[:, 1],
+                z=vertices[:, 2],
+                i=i,
+                j=j,
+                k=k,
+                color=color,
+                flatshading=False,
+                lighting={"ambient": 0.55, "diffuse": 0.85, "specular": 0.2, "roughness": 0.7},
+                lightposition={"x": 120, "y": 160, "z": 200},
+                hoverinfo="skip",
+                name=os.path.basename(glb_path),
+                showscale=False,
+            )
+        )
+        has_geometry = True
+
+    if not has_geometry:
+        if failed_meshes:
+            raise ValueError("GLB mesh could not be triangulated cleanly")
+        raise ValueError("No mesh geometry found in GLB file")
+
+    figure.update_layout(
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        paper_bgcolor="#f8fafc",
+        scene={
+            "bgcolor": "#f8fafc",
+            "aspectmode": "data",
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "zaxis": {"visible": False},
+            "camera": {"eye": {"x": 1.8, "y": 1.8, "z": 1.2}},
+        },
+        showlegend=False,
+    )
+    return figure
 
 
 def display_3d_model(glb_path):
-    """Render a simple success panel for generated GLB files."""
-    glb_file = Path(glb_path)
-    st.success("3D model generated")
-    st.write(f"Saved model file: {glb_file.name}")
+    """Display a 3D GLB model using Plotly as a browser-safe fallback."""
+    st.caption(f"Viewing: {os.path.basename(glb_path)}")
+    try:
+        figure = build_plotly_figure(glb_path)
+    except Exception as exc:
+        show_preview_mode_badge("Static")
+        st.warning(f"3D preview failed to load interactively: {exc}")
+        try:
+            snapshot_bytes = build_static_snapshot(glb_path, str(exc))
+            st.image(snapshot_bytes, caption="Static snapshot fallback", use_container_width=True)
+        except Exception as snapshot_exc:
+            st.info(f"Static snapshot also failed: {snapshot_exc}")
+        return
+
+    show_preview_mode_badge("Interactive")
+    st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False})
+
+
+def persist_glb_in_session(glb_path):
+    """Store GLB bytes in session so preview survives temp-file path loss."""
+    if not glb_path or not os.path.exists(glb_path):
+        return
+    with open(glb_path, "rb") as f:
+        glb_bytes = f.read()
+    st.session_state["glb_path"] = glb_path
+    st.session_state["glb_bytes"] = glb_bytes
+    st.session_state["glb_name"] = os.path.basename(glb_path)
+    update_snapshot_preview(glb_path)
+
+
+def get_session_glb_path():
+    """Return a valid on-disk GLB path from session, recreating temp file when needed."""
+    glb_path = st.session_state.get("glb_path")
+    if glb_path and os.path.exists(glb_path):
+        st.session_state["glb_restored_from_bytes"] = False
+        return glb_path
+
+    glb_bytes = st.session_state.get("glb_bytes")
+    if not glb_bytes:
+        return ""
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+    tmp.write(glb_bytes)
+    tmp.close()
+    st.session_state["glb_path"] = tmp.name
+    st.session_state["glb_restored_from_bytes"] = True
+    if "glb_name" not in st.session_state:
+        st.session_state["glb_name"] = os.path.basename(tmp.name)
+    return tmp.name
 
 
 st.set_page_config(
@@ -104,19 +273,113 @@ st.set_page_config(
 )
 
 
+def setup_pwa():
+    """Setup PWA manifest and service worker."""
+    pwa_html = """
+    <script>
+    const safeDocument = () => {
+        try {
+            if (window.parent && window.parent !== window && window.parent.document) {
+                return window.parent.document;
+            }
+        } catch (err) {
+            // parent is inaccessible due to cross-origin or sandbox restrictions
+        }
+        return document;
+    };
+
+    const ensureHeadTag = (doc, tagName, attrs) => {
+        const selector = tagName + Object.entries(attrs)
+            .map(([key, value]) => `[${key}="${value}"]`)
+            .join('');
+
+        if (!doc.querySelector(selector)) {
+            const element = doc.createElement(tagName);
+            Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+            doc.head.appendChild(element);
+        }
+    };
+
+    const attachPwaMeta = () => {
+        const doc = safeDocument();
+        ensureHeadTag(doc, 'link', { rel: 'manifest', href: '/manifest.json' });
+        ensureHeadTag(doc, 'meta', { name: 'theme-color', content: '#ff4b4b' });
+        ensureHeadTag(doc, 'meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
+        ensureHeadTag(doc, 'meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'default' });
+        ensureHeadTag(doc, 'meta', { name: 'apple-mobile-web-app-title', content: '3D Generator' });
+        ensureHeadTag(doc, 'link', {
+            rel: 'apple-touch-icon',
+            href: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiIgdmlld0JveD0iMCAwIDE5MiAxOTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxOTIiIGhlaWdodD0iMTkyIiByeD0iMjQiIGZpbGw9IiNmZjRiNGIiLz4KPHBhdGggZD0iTTEyMCA2NGgzMnY2NGgtMzJ2LTY0ek0xMjggOTZ2MzJoLTE2di0zMmgxNnoiIGZpbGw9IndoaXRlIi8+Cjwvc3ZnPgo='
+        });
+    };
+
+    const registerServiceWorker = () => {
+        const targetWindow = (window.parent && window.parent !== window ? window.parent : window);
+        if (targetWindow.navigator && 'serviceWorker' in targetWindow.navigator) {
+            targetWindow.addEventListener('load', () => {
+                targetWindow.navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+                    .then((registration) => {
+                        registration.update();
+                        console.log('ServiceWorker registration successful');
+                    })
+                    .catch(err => console.log('ServiceWorker registration failed:', err));
+            });
+        }
+    };
+
+    let deferredPrompt;
+    const setupInstallPrompt = () => {
+        const targetWindow = (window.parent && window.parent !== window ? window.parent : window);
+        targetWindow.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            const installButton = document.getElementById('install-button');
+            if (installButton) {
+                installButton.style.display = 'block';
+            }
+        });
+    };
+
+    const bindInstallButton = () => {
+        const installButton = document.getElementById('install-button');
+        if (installButton) {
+            installButton.addEventListener('click', async () => {
+                if (!deferredPrompt) return;
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                deferredPrompt = null;
+                installButton.style.display = 'none';
+                console.log('Install prompt outcome:', outcome);
+            });
+        }
+    };
+
+    attachPwaMeta();
+    registerServiceWorker();
+    setupInstallPrompt();
+    bindInstallButton();
+    </script>
+    """
+
+    st.markdown(pwa_html, unsafe_allow_html=True)
+
+
+setup_pwa()
+
+
 def get_openai_client():
     from openai import OpenAI
 
-    api_key = get_first_available_key("OPENAI_API_KEY", "OPENAI_KEY")
+    api_key = get_api_key("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OpenAI key not found. Add OPENAI_API_KEY to Streamlit secrets.")
+        raise ValueError("OPENAI_API_KEY not found in environment or secrets")
     return OpenAI(api_key=api_key)
 
 
 def generate_image_openai(prompt: str) -> str:
     try:
-        if not get_first_available_key("OPENAI_API_KEY", "OPENAI_KEY"):
-            raise ValueError("OpenAI key not found. Add OPENAI_API_KEY to Streamlit secrets.")
+        if not get_api_key("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY not found in environment or secrets")
 
         client = get_openai_client()
         response = client.images.generate(
@@ -150,9 +413,13 @@ def generate_image_openai(prompt: str) -> str:
 
 def generate_image_sdxl(prompt: str) -> str:
     try:
-        hf_token = get_first_available_key("HF_TOKEN", "HUGGINGFACE_API_KEY", "RKStudioHF1")
+        hf_token = (
+            os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGINGFACE_API_KEY")
+            or os.environ.get("RKStudioHF1")
+        )
         if not hf_token:
-            raise ValueError("Set HF_TOKEN (or HUGGINGFACE_API_KEY / RKStudioHF1) in Streamlit secrets.")
+            raise ValueError("Set HF_TOKEN, HUGGINGFACE_API_KEY, or RKStudioHF1 in your .env for SDXL mode")
 
         api_url = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {
@@ -206,51 +473,8 @@ def image_to_3d(host, image_path, **kwargs):
     return response.content
 
 
-def preflight_stability_key():
-    """Validate Stability key format and account access before 3D generation."""
-    stability_key = get_api_key("STABILITY_KEY") or get_api_key("STABILITY_API_KEY")
-    if not stability_key:
-        return False, "Stability key missing. Add STABILITY_KEY in secrets."
-
-    try:
-        response = requests.get(
-            "https://api.stability.ai/v1/user/balance",
-            headers={
-                "Authorization": f"Bearer {stability_key}",
-                "Accept": "application/json",
-            },
-            timeout=30,
-        )
-    except Exception as exc:
-        return False, f"Preflight request failed: {exc}"
-
-    if response.status_code == 200:
-        try:
-            payload = response.json()
-            credits = payload.get("credits")
-            if credits is not None:
-                return True, f"Stability key validated. Credits available: {credits}"
-        except Exception:
-            pass
-        return True, "Stability key validated successfully."
-
-    if response.status_code == 401:
-        return False, (
-            "Stability authentication failed (401). The key is invalid, malformed, or sent with a bad Authorization header."
-        )
-    if response.status_code == 403:
-        return False, "Stability request forbidden (403). Key exists but lacks required permissions."
-
-    detail = response.text[:300]
-    return False, f"Stability preflight failed ({response.status_code}): {detail}"
-
-
 def generate_3d_model_stability(image_path, texture_resolution, foreground_ratio, remesh, vertex_count):
     try:
-        preflight_ok, preflight_message = preflight_stability_key()
-        if not preflight_ok:
-            raise ValueError(preflight_message)
-
         host = "https://api.stability.ai/v2beta/3d/stable-fast-3d"
         glb_data = image_to_3d(
             host=host,
@@ -339,9 +563,9 @@ def poll_tripo3d_task(task_id: str, api_key: str, timeout_seconds: int = 300, in
 
 def generate_3d_model_tripo(image_path):
     try:
-        api_key = get_first_available_key("TRIPO3D_API_KEY", "RKStudioTripo")
+        api_key = os.environ.get("TRIPO3D_API_KEY") or os.environ.get("RKStudioTripo")
         if not api_key:
-            raise ValueError("Set TRIPO3D_API_KEY (or RKStudioTripo) in Streamlit secrets.")
+            raise ValueError("Set TRIPO3D_API_KEY or RKStudioTripo in your .env")
 
         file_token = upload_image_to_tripo3d(image_path, api_key)
         task_id = create_tripo3d_task(file_token, image_path, api_key)
@@ -365,170 +589,168 @@ def generate_3d_model_tripo(image_path):
         return ""
 
 
-def main():
-    st.title("RKstudio Image to 3D Model Generator")
-    st.caption("Safe mode: minimized workflow for reliable startup.")
+st.title("RKstudio → 🖼️ Image → 🧊 3D Model Generator")
 
-    with st.expander("API key overrides (session only)", expanded=False):
-        st.caption("Optional: paste keys here to test immediately. These are not saved to repo and reset when session restarts.")
-        runtime_keys = st.session_state.get("runtime_api_keys", {})
-        runtime_keys["OPENAI_API_KEY"] = st.text_input(
-            "OpenAI key",
-            value=runtime_keys.get("OPENAI_API_KEY", ""),
-            type="password",
-            key="override_openai_api_key",
-        ).strip()
-        runtime_keys["HF_TOKEN"] = st.text_input(
-            "Hugging Face key (HF_TOKEN)",
-            value=runtime_keys.get("HF_TOKEN", ""),
-            type="password",
-            key="override_hf_token",
-        ).strip()
-        runtime_keys["STABILITY_KEY"] = st.text_input(
-            "Stability key",
-            value=runtime_keys.get("STABILITY_KEY", ""),
-            type="password",
-            key="override_stability_key",
-        ).strip()
-        runtime_keys["TRIPO3D_API_KEY"] = st.text_input(
-            "Tripo3D key",
-            value=runtime_keys.get("TRIPO3D_API_KEY", ""),
-            type="password",
-            key="override_tripo3d_api_key",
-        ).strip()
-        st.session_state["runtime_api_keys"] = runtime_keys
+install_button_html = """
+<div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
+    <button id="install-button" style="
+        background: #ff4b4b;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        display: none;
+    ">
+        📱 Install App
+    </button>
+</div>
 
-    with st.expander("Runtime status", expanded=True):
-        st.write("App initialized successfully.")
-        st.write(f"Python: {os.environ.get('PYTHON_VERSION', 'unknown')}")
+<script>
+const installButton = document.getElementById('install-button');
 
-    # Safe diagnostics: only indicates presence/absence of required keys.
-    with st.expander("API key diagnostics (safe)", expanded=True):
-        openai_ready = has_any_key("OPENAI_API_KEY", "OPENAI_KEY")
-        sdxl_ready = has_any_key("HF_TOKEN", "HUGGINGFACE_API_KEY", "RKStudioHF1")
-        stability_ready = has_any_key("STABILITY_KEY", "STABILITY_API_KEY")
-        tripo_ready = has_any_key("TRIPO3D_API_KEY", "RKStudioTripo")
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.deferredPrompt = e;
+    installButton.style.display = 'block';
+});
 
-        st.write(f"OpenAI key detected: {'yes' if openai_ready else 'no'}")
-        st.write(f"SDXL key detected: {'yes' if sdxl_ready else 'no'}")
-        st.write(f"Stability key detected: {'yes' if stability_ready else 'no'}")
-        st.write(f"Tripo key detected: {'yes' if tripo_ready else 'no'}")
-        st.caption("Only key presence is shown. Secret values are never displayed.")
+installButton.addEventListener('click', async () => {
+    const promptEvent = window.deferredPrompt;
+    if (!promptEvent) return;
 
-    tab1, tab2 = st.tabs(["Image", "3D Model"])
+    promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
 
-    with tab1:
-        st.subheader("Step 1: Create or upload an image")
-        mode = st.selectbox(
-            "Image generation mode",
-            ["Fast_Mode_OA", "Slow_Mode_SDXL"],
-            index=0,
-            key="image_mode_select",
-        )
-        prompt = st.text_area(
-            "Image prompt",
-            value="Simple toy model of a chicken on a plain studio background",
-            key="image_prompt_input",
-        )
+    window.deferredPrompt = null;
+    installButton.style.display = 'none';
+});
+</script>
+"""
 
-        if st.button("Generate Image", key="generate_image_button"):
-            with st.spinner("Generating image..."):
-                image_path = generate_image_openai(prompt) if mode == "Fast_Mode_OA" else generate_image_sdxl(prompt)
-                if image_path:
-                    st.session_state["image_path"] = image_path
-                    st.image(image_path, caption="Generated Image", width=400)
+st.markdown(install_button_html, unsafe_allow_html=True)
 
-        uploaded = st.file_uploader("Or upload image", type=["png", "jpg", "jpeg"], key="upload_image_file")
-        if uploaded:
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            tmp.write(uploaded.read())
-            tmp.close()
-            st.session_state["image_path"] = tmp.name
-            st.image(tmp.name, caption="Uploaded Image", width=400)
+tab1, tab2, tab3 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer"])
 
-    with tab2:
-        st.subheader("Step 2: Convert image to 3D")
-        image_path = st.session_state.get("image_path")
-        if not image_path:
-            st.info("Generate or upload an image in Step 1 first.")
-        else:
-            st.image(image_path, caption="Input Image", width=320)
-            mode = st.selectbox(
-                "3D mode",
-                ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"],
-                index=0,
-                key="model_mode_select",
-            )
+with tab1:
+    st.caption("Remember to check API usage!")
+    mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0)
+    prompt = st.text_area(
+        "Image prompt",
+        value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
+    )
 
-            if mode == "Medium_Quality_Mode_STA":
-                texture_resolution = st.selectbox(
-                    "Texture Resolution",
-                    ["512", "1024", "2048"],
-                    index=1,
-                    key="texture_resolution_select",
-                )
-                foreground_ratio = st.slider(
-                    "Foreground Ratio",
-                    0.1,
-                    1.0,
-                    0.85,
-                    0.05,
-                    key="foreground_ratio_slider",
-                )
-                remesh = st.selectbox("Remesh", ["none", "quad", "triangle"], key="remesh_select")
-                vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1, key="vertex_count_input")
-
-                if st.button("Test Stability Key", key="test_stability_key_button"):
-                    with st.spinner("Checking Stability key..."):
-                        ok, message = preflight_stability_key()
-                    if ok:
-                        st.success(message)
-                    else:
-                        st.error(message)
-
-                if st.button("Generate 3D Model", key="generate_3d_stability_button"):
-                    with st.spinner("Generating 3D model..."):
-                        glb_path = generate_3d_model_stability(
-                            image_path,
-                            texture_resolution,
-                            foreground_ratio,
-                            remesh,
-                            vertex_count,
-                        )
-                        if glb_path:
-                            display_3d_model(glb_path)
-                            with open(glb_path, "rb") as f:
-                                st.download_button(
-                                    "Download GLB",
-                                    f,
-                                    file_name="model.glb",
-                                    mime="model/gltf-binary",
-                                    key="download_glb_stability",
-                                )
+    if st.button("Generate Image"):
+        with st.spinner("Generating image..."):
+            if mode == "Fast_Mode_OA":
+                image_path = generate_image_openai(prompt)
             else:
-                if st.button("Generate 3D Model", key="generate_3d_tripo_button"):
-                    with st.spinner("Generating 3D model..."):
-                        glb_path = generate_3d_model_tripo(image_path)
-                        if glb_path:
-                            display_3d_model(glb_path)
-                            with open(glb_path, "rb") as f:
-                                st.download_button(
-                                    "Download GLB",
-                                    f,
-                                    file_name="model.glb",
-                                    mime="model/gltf-binary",
-                                    key="download_glb_tripo",
-                                )
+                image_path = generate_image_sdxl(prompt)
 
+            if image_path:
+                st.session_state["image_path"] = image_path
+                st.image(image_path, caption="Generated Image", width=400)
 
-def run_app():
-    try:
-        main()
-    except Exception as exc:
-        st.error("Startup error detected. Details are shown below.")
-        st.exception(exc)
-        st.code(traceback.format_exc())
+with tab2:
+    st.caption("Remember to check API usage!")
+    mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0)
+    image_path = st.session_state.get("image_path")
+    current_glb_path = st.session_state.get("glb_path")
 
+    uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"])
+    if uploaded:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(uploaded.read())
+        tmp.close()
+        image_path = tmp.name
 
-if __name__ == "__main__":
-    run_app()
+    if not image_path:
+        st.warning("Please generate or upload an image first.")
+    else:
+        st.image(image_path, caption="Input Image", width=300)
+
+        if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
+            texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
+            foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
+            remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
+            vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
+
+            if st.button("Generate 3D Model", key="generate_3d_stability"):
+                with st.spinner("Generating 3D model..."):
+                    glb_path = generate_3d_model_stability(
+                        image_path,
+                        texture_resolution,
+                        foreground_ratio,
+                        remesh,
+                        vertex_count,
+                    )
+
+                    if glb_path:
+                        persist_glb_in_session(glb_path)
+                        st.success("3D model generated!")
+                        with open(glb_path, "rb") as f:
+                            st.download_button(
+                                "Download GLB",
+                                f,
+                                file_name="model.glb",
+                                mime="model/gltf-binary",
+                            )
+        elif mode in ["High_Quality_Mode_TRO", "High_Quality_Mode", "Tripo3D", "Fast_Mode"]:
+            if st.button("Generate 3D Model", key="generate_3d_tripo"):
+                with st.spinner("Generating 3D model..."):
+                    glb_path = generate_3d_model_tripo(image_path)
+
+                    if glb_path:
+                        persist_glb_in_session(glb_path)
+                        st.success("3D model generated!")
+                        with open(glb_path, "rb") as f:
+                            st.download_button(
+                                "Download GLB",
+                                f,
+                                file_name="model.glb",
+                                mime="model/gltf-binary",
+                            )
+
+        current_glb_path = get_session_glb_path()
+        if current_glb_path and os.path.exists(current_glb_path):
+            snapshot_png = st.session_state.get("glb_preview_png")
+            if snapshot_png:
+                st.subheader("Model Image Preview")
+                st.image(snapshot_png, caption="Snapshot of generated GLB", use_container_width=True)
+            st.subheader("Current 3D Preview")
+            restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
+            st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
+            display_3d_model(current_glb_path)
+        elif st.session_state.get("glb_bytes"):
+            st.info("GLB exists in session but could not be restored to disk for preview.")
+
+with tab3:
+    st.caption("Preview an existing GLB file or inspect the most recently generated model.")
+    viewer_upload = st.file_uploader("Upload a GLB file", type=["glb"], key="viewer_glb_upload")
+
+    if viewer_upload:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+        tmp.write(viewer_upload.read())
+        tmp.close()
+        persist_glb_in_session(tmp.name)
+
+    current_glb_path = get_session_glb_path()
+    if current_glb_path and os.path.exists(current_glb_path):
+        snapshot_png = st.session_state.get("glb_preview_png")
+        if snapshot_png:
+            st.subheader("Model Image Preview")
+            st.image(snapshot_png, caption="Snapshot of selected GLB", use_container_width=True)
+        restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
+        st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
+        display_3d_model(current_glb_path)
+        with open(current_glb_path, "rb") as f:
+            st.download_button(
+                "Download Current GLB",
+                f,
+                file_name=st.session_state.get("glb_name", os.path.basename(current_glb_path)),
+                mime="model/gltf-binary",
+                key="download_current_glb",
+            )
+    else:
+        st.info("Upload a .glb file here or generate one in the 3D Model Generation tab.")

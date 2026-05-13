@@ -3,3 +3,6 @@ openai
 Pillow
 requests
 python-dotenv
+plotly
+trimesh
+pygltflib

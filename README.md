@@ -7,6 +7,7 @@ Streamlit app for turning text prompts into images and then converting those ima
 - Image generation with OpenAI or SDXL via Hugging Face
 - 3D model generation with Stability AI or Tripo3D
 - Interactive GLB viewer in the browser
+- AI chat assistant powered by Cohere for idea generation and workflow guidance
 - PWA metadata and service worker support
 
 ## Run locally
@@ -24,6 +25,7 @@ OPENAI_API_KEY=your_openai_key
 STABILITY_KEY=your_stability_key
 HF_TOKEN=your_huggingface_token
 TRIPO3D_API_KEY=your_tripo3d_key
+COHERE_API_KEY=your_cohere_key
 ```
 
 Start the app:

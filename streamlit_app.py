@@ -29,6 +29,54 @@ def get_api_key(key_name):
         return None
 
 
+def get_cohere_api_key():
+    """Get Cohere key from environment variables or Streamlit secrets."""
+    key = get_api_key("COHERE_API_KEY") or get_api_key("COHERE_KEY")
+    return key
+
+
+def cohere_chat(messages, model, temperature=0.7, max_tokens=450):
+    """Call Cohere chat API using conversation messages and return text."""
+    api_key = get_cohere_api_key()
+    if not api_key:
+        raise ValueError("COHERE_API_KEY not found (env/secrets)")
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post("https://api.cohere.com/v2/chat", headers=headers, json=payload, timeout=90)
+    if response.status_code != 200:
+        raise Exception(f"Cohere request failed ({response.status_code}): {response.text}")
+
+    data = response.json()
+    message = data.get("message", {})
+    content = message.get("content", [])
+
+    text_parts = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text_parts.append(part.get("text", ""))
+
+    text = "\n".join(chunk for chunk in text_parts if chunk).strip()
+    if text:
+        return text
+
+    # Last-resort parser for alternate response shapes.
+    fallback = data.get("text") or data.get("output_text")
+    if fallback:
+        return str(fallback)
+
+    raise Exception("Cohere returned an unexpected response format")
+
+
 def _project_point_iso(point):
     """Project a 3D point into a 2D isometric-like view."""
     x, y, z = point
@@ -441,7 +489,7 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer", "Conversion"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer", "Conversion", "AI Chat Assistant"])
 
     with tab1:
         st.caption("Remember to check API usage!")
@@ -631,6 +679,72 @@ installButton.addEventListener('click', async () => {
                 )
         else:
             st.info("Upload a .glb file here, or generate one in the 3D Model Generation tab.")
+
+    with tab5:
+        st.caption("Ask the assistant for image prompts, styling directions, and 3D model ideas.")
+
+        cohere_key_loaded = bool(get_cohere_api_key())
+        if cohere_key_loaded:
+            st.success("Cohere key detected. Assistant is ready.")
+        else:
+            st.warning("Set COHERE_API_KEY in .env or Streamlit secrets.")
+
+        with st.expander("Chat Settings", expanded=False):
+            cohere_model = st.text_input("Cohere model", value="command-r-plus-08-2024", key="cohere_model")
+            cohere_temperature = st.slider("Temperature", min_value=0.0, max_value=1.5, value=0.7, step=0.1, key="cohere_temp")
+            cohere_max_tokens = st.slider("Max output tokens", min_value=128, max_value=1200, value=450, step=32, key="cohere_max_tokens")
+
+        if "cohere_chat_messages" not in st.session_state:
+            st.session_state["cohere_chat_messages"] = []
+
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            if st.button("Use starter question"):
+                st.session_state["cohere_pending_prompt"] = "Give me some image and 3D model ideas for a collectible figurine series."
+        with col_b:
+            if st.button("Clear chat"):
+                st.session_state["cohere_chat_messages"] = []
+                st.session_state.pop("cohere_pending_prompt", None)
+                st.rerun()
+
+        for msg in st.session_state["cohere_chat_messages"]:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        prompt_input = st.chat_input("Ask the assistant anything about image + 3D concept ideas")
+        if not prompt_input and st.session_state.get("cohere_pending_prompt"):
+            prompt_input = st.session_state.pop("cohere_pending_prompt")
+
+        if prompt_input:
+            st.session_state["cohere_chat_messages"].append({"role": "user", "content": prompt_input})
+            with st.chat_message("user"):
+                st.markdown(prompt_input)
+
+            with st.chat_message("assistant"):
+                if not cohere_key_loaded:
+                    assistant_reply = "I could not find a Cohere API key. Please add COHERE_API_KEY to .env or Streamlit secrets."
+                    st.error(assistant_reply)
+                else:
+                    try:
+                        with st.spinner("Thinking..."):
+                            system_instruction = (
+                                "You are an expert creative assistant for an image-to-3D app. "
+                                "Give concise, practical ideas for prompts, style directions, "
+                                "and 3D production tips."
+                            )
+                            api_messages = [{"role": "system", "content": system_instruction}] + st.session_state["cohere_chat_messages"]
+                            assistant_reply = cohere_chat(
+                                messages=api_messages,
+                                model=cohere_model,
+                                temperature=cohere_temperature,
+                                max_tokens=cohere_max_tokens,
+                            )
+                        st.markdown(assistant_reply)
+                    except Exception as exc:
+                        assistant_reply = f"Chat request failed: {exc}"
+                        st.error(assistant_reply)
+
+            st.session_state["cohere_chat_messages"].append({"role": "assistant", "content": assistant_reply})
 
 
 def get_openai_client():

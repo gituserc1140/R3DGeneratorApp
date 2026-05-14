@@ -30,51 +30,74 @@ def get_api_key(key_name):
 
 
 def get_cohere_api_key():
-    """Get Cohere key from environment variables or Streamlit secrets."""
-    key = get_api_key("COHERE_API_KEY") or get_api_key("COHERE_KEY")
-    return key
+    """Get Cohere API key from common env/secret variable names."""
+    candidate_names = [
+        "COHERE_API_KEY",
+        "COHERE_KEY",
+        "RKStudioCohere",
+        "RKSTUDIO_COHERE_API_KEY",
+    ]
+    for name in candidate_names:
+        value = get_api_key(name)
+        if value:
+            return value
+    return None
 
 
-def cohere_chat(messages, model, temperature=0.7, max_tokens=450):
-    """Call Cohere chat API using conversation messages and return text."""
-    api_key = get_cohere_api_key()
-    if not api_key:
-        raise ValueError("COHERE_API_KEY not found (env/secrets)")
+def get_cohere_response(api_key, user_input, history, model_name, temperature, max_tokens):
+    """Generate a Cohere response, supporting both V1 and V2 SDK clients."""
+    import cohere
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    # Try V1 first.
+    client = cohere.Client(api_key)
+    v1_history = [
+        {
+            "role": "USER" if msg["role"] == "user" else "CHATBOT",
+            "message": msg["content"],
+        }
+        for msg in history
+    ]
+    try:
+        response = client.chat(
+            message=user_input,
+            chat_history=v1_history,
+            model=model_name,
+            temperature=float(temperature),
+            max_tokens=int(max_tokens),
+        )
+        text = getattr(response, "text", "")
+        if text:
+            return text.strip()
+    except Exception:
+        pass
 
-    response = requests.post("https://api.cohere.com/v2/chat", headers=headers, json=payload, timeout=90)
-    if response.status_code != 200:
-        raise Exception(f"Cohere request failed ({response.status_code}): {response.text}")
+    # Fallback to V2.
+    client_v2 = cohere.ClientV2(api_key)
+    messages = [
+        {
+            "role": "user" if msg["role"] == "user" else "assistant",
+            "content": msg["content"],
+        }
+        for msg in history
+    ]
+    messages.append({"role": "user", "content": user_input})
+    response_v2 = client_v2.chat(
+        model=model_name,
+        messages=messages,
+        temperature=float(temperature),
+        max_tokens=int(max_tokens),
+    )
 
-    data = response.json()
-    message = data.get("message", {})
-    content = message.get("content", [])
+    if hasattr(response_v2, "message") and getattr(response_v2.message, "content", None):
+        parts = []
+        for block in response_v2.message.content:
+            if getattr(block, "type", "") == "text":
+                parts.append(getattr(block, "text", ""))
+        text = "\n".join([part for part in parts if part]).strip()
+        if text:
+            return text
 
-    text_parts = []
-    for part in content:
-        if isinstance(part, dict) and part.get("type") == "text":
-            text_parts.append(part.get("text", ""))
-
-    text = "\n".join(chunk for chunk in text_parts if chunk).strip()
-    if text:
-        return text
-
-    # Last-resort parser for alternate response shapes.
-    fallback = data.get("text") or data.get("output_text")
-    if fallback:
-        return str(fallback)
-
-    raise Exception("Cohere returned an unexpected response format")
+    raise ValueError("No response text returned by Cohere")
 
 
 def _project_point_iso(point):
@@ -489,7 +512,19 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer", "Conversion", "AI Chat Assistant"])
+    tab1, tab2, tab3, tab4_obj, tab4_stl, tab5 = st.tabs([
+        "Image Generation",
+        "3D Model Generation",
+        "3D File Viewer",
+        "Convert to OBJ",
+        "Convert to STL",
+        "AI Chat Assistant",
+    ])
+
+    def sanitize_filename(name):
+        import re
+
+        return re.sub(r"[^\w\-]+", "_", (name or "").strip())
 
     with tab1:
         st.caption("Remember to check API usage!")
@@ -501,11 +536,7 @@ installButton.addEventListener('click', async () => {
 
         if st.button("Generate Image"):
             with st.spinner("Generating image..."):
-                if mode == "Fast_Mode_OA":
-                    image_path = generate_image_openai(prompt)
-                else:
-                    image_path = generate_image_sdxl(prompt)
-
+                image_path = generate_image_openai(prompt) if mode == "Fast_Mode_OA" else generate_image_sdxl(prompt)
                 if image_path:
                     st.session_state["image_path"] = image_path
                     st.image(image_path, caption="Generated Image", width=400)
@@ -515,7 +546,7 @@ installButton.addEventListener('click', async () => {
         mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0, key="model_mode_select")
         image_path = st.session_state.get("image_path")
 
-        uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"])
+        uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"], key="model_image_upload")
         if uploaded:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
             tmp.write(uploaded.read())
@@ -532,6 +563,7 @@ installButton.addEventListener('click', async () => {
                 foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
                 remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
                 vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
+                filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_sta")
 
                 if st.button("Generate 3D Model", key="generate_3d_stability"):
                     with st.spinner("Generating 3D model..."):
@@ -542,30 +574,31 @@ installButton.addEventListener('click', async () => {
                             remesh,
                             vertex_count,
                         )
-
                         if glb_path:
                             persist_glb_in_session(glb_path)
                             st.success("3D model generated!")
+                            safe_name = sanitize_filename(filename_glb) or "model"
                             with open(glb_path, "rb") as f:
                                 st.download_button(
                                     "Download GLB",
                                     f,
-                                    file_name="model.glb",
+                                    file_name=f"{safe_name}.glb",
                                     mime="model/gltf-binary",
                                 )
-            elif mode in ["High_Quality_Mode_TRO", "High_Quality_Mode", "Tripo3D", "Fast_Mode"]:
+            else:
+                filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_tripo")
                 if st.button("Generate 3D Model", key="generate_3d_tripo"):
                     with st.spinner("Generating 3D model..."):
                         glb_path = generate_3d_model_tripo(image_path)
-
                         if glb_path:
                             persist_glb_in_session(glb_path)
                             st.success("3D model generated!")
+                            safe_name = sanitize_filename(filename_glb) or "model"
                             with open(glb_path, "rb") as f:
                                 st.download_button(
                                     "Download GLB",
                                     f,
-                                    file_name="model.glb",
+                                    file_name=f"{safe_name}.glb",
                                     mime="model/gltf-binary",
                                 )
 
@@ -601,150 +634,191 @@ installButton.addEventListener('click', async () => {
             restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
             st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
             display_3d_model(current_glb_path, chart_key="tab3_plotly_preview")
+            default_glb_name = os.path.splitext(st.session_state.get("glb_name", os.path.basename(current_glb_path)))[0]
+            filename_glb_view = st.text_input("GLB filename (no extension)", value=default_glb_name, key="filename_glb_tab3")
+            safe_name = sanitize_filename(filename_glb_view) or "model"
             with open(current_glb_path, "rb") as f:
                 st.download_button(
                     "Download Current GLB",
                     f,
-                    file_name=st.session_state.get("glb_name", os.path.basename(current_glb_path)),
+                    file_name=f"{safe_name}.glb",
                     mime="model/gltf-binary",
                     key="download_current_glb",
                 )
         else:
             st.info("Upload a .glb file here or generate one in the 3D Model Generation tab.")
 
-    with tab4:
-        st.caption("Convert the current GLB model to OBJ and/or STL.")
-        conversion_upload = st.file_uploader("Upload a GLB for conversion (optional)", type=["glb"], key="conversion_glb_upload")
+    with tab4_obj:
+        st.caption("Convert a GLB to OBJ and choose the output filename.")
+        obj_upload = st.file_uploader("Upload a GLB for OBJ conversion (optional)", type=["glb"], key="obj_conversion_glb_upload")
 
-        if conversion_upload:
+        if obj_upload:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
-            tmp.write(conversion_upload.read())
+            tmp.write(obj_upload.read())
             tmp.close()
-            persist_glb_in_session(tmp.name)
+            st.session_state["obj_glb_path"] = tmp.name
 
-        current_glb_path = get_session_glb_path()
-        if current_glb_path and os.path.exists(current_glb_path):
-            source_name = st.session_state.get("glb_name", os.path.basename(current_glb_path))
-            st.write(f"Current GLB source: {source_name}")
+        obj_glb_path = st.session_state.get("obj_glb_path") or get_session_glb_path()
+        if obj_glb_path and os.path.exists(obj_glb_path):
+            source_name = os.path.splitext(os.path.basename(obj_glb_path))[0]
+            st.write(f"Current GLB source: {os.path.basename(obj_glb_path)}")
+            filename_obj = st.text_input("OBJ filename (no extension)", value=source_name, key="filename_obj_tab")
 
-            target_formats = st.multiselect(
-                "Select target formats",
-                ["OBJ", "STL"],
-                default=["OBJ"],
-                key="conversion_target_formats",
-            )
+            if st.button("Convert to OBJ", key="convert_to_obj"):
+                try:
+                    mesh = load_glb_as_mesh(obj_glb_path)
+                    st.session_state["obj_bytes"] = export_mesh_bytes(mesh, "obj")
+                    st.success("Conversion to OBJ complete.")
+                except Exception as exc:
+                    st.error(f"OBJ conversion failed: {exc}")
 
-            if st.button("Convert Model", key="convert_glb_model"):
-                if not target_formats:
-                    st.warning("Select at least one target format.")
-                else:
-                    with st.spinner("Converting model..."):
-                        try:
-                            mesh = load_glb_as_mesh(current_glb_path)
-                            if "OBJ" in target_formats:
-                                st.session_state["conversion_obj_bytes"] = export_mesh_bytes(mesh, "obj")
-                            else:
-                                st.session_state.pop("conversion_obj_bytes", None)
-
-                            if "STL" in target_formats:
-                                st.session_state["conversion_stl_bytes"] = export_mesh_bytes(mesh, "stl")
-                            else:
-                                st.session_state.pop("conversion_stl_bytes", None)
-
-                            st.session_state["conversion_source_name"] = source_name
-                            st.success("Conversion complete. Download your file(s) below.")
-                        except Exception as exc:
-                            st.error(f"Conversion failed: {exc}")
-
-            base_name = os.path.splitext(st.session_state.get("conversion_source_name", source_name))[0]
-
-            obj_bytes = st.session_state.get("conversion_obj_bytes")
+            obj_bytes = st.session_state.get("obj_bytes")
             if obj_bytes:
+                safe_name_obj = sanitize_filename(filename_obj) or "model"
                 st.download_button(
                     "Download OBJ",
                     obj_bytes,
-                    file_name=f"{base_name}.obj",
+                    file_name=f"{safe_name_obj}.obj",
                     mime="model/obj",
-                    key="download_converted_obj",
+                    key="download_obj",
                 )
+        else:
+            st.info("Upload a .glb file here, or generate one in the 3D Model Generation tab.")
 
-            stl_bytes = st.session_state.get("conversion_stl_bytes")
+    with tab4_stl:
+        st.caption("Convert a GLB to STL and choose the output filename.")
+        stl_upload = st.file_uploader("Upload a GLB for STL conversion (optional)", type=["glb"], key="stl_conversion_glb_upload")
+
+        if stl_upload:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+            tmp.write(stl_upload.read())
+            tmp.close()
+            st.session_state["stl_glb_path"] = tmp.name
+
+        stl_glb_path = st.session_state.get("stl_glb_path") or get_session_glb_path()
+        if stl_glb_path and os.path.exists(stl_glb_path):
+            source_name = os.path.splitext(os.path.basename(stl_glb_path))[0]
+            st.write(f"Current GLB source: {os.path.basename(stl_glb_path)}")
+            filename_stl = st.text_input("STL filename (no extension)", value=source_name, key="filename_stl_tab")
+
+            if st.button("Convert to STL", key="convert_to_stl"):
+                try:
+                    mesh = load_glb_as_mesh(stl_glb_path)
+                    st.session_state["stl_bytes"] = export_mesh_bytes(mesh, "stl")
+                    st.success("Conversion to STL complete.")
+                except Exception as exc:
+                    st.error(f"STL conversion failed: {exc}")
+
+            stl_bytes = st.session_state.get("stl_bytes")
             if stl_bytes:
+                safe_name_stl = sanitize_filename(filename_stl) or "model"
                 st.download_button(
                     "Download STL",
                     stl_bytes,
-                    file_name=f"{base_name}.stl",
+                    file_name=f"{safe_name_stl}.stl",
                     mime="model/stl",
-                    key="download_converted_stl",
+                    key="download_stl",
                 )
         else:
             st.info("Upload a .glb file here, or generate one in the 3D Model Generation tab.")
 
     with tab5:
-        st.caption("Ask the assistant for image prompts, styling directions, and 3D model ideas.")
-
-        cohere_key_loaded = bool(get_cohere_api_key())
-        if cohere_key_loaded:
+        st.caption("Ask the assistant for image prompts, styling ideas, and model concepts.")
+        cohere_api_key = get_cohere_api_key()
+        if cohere_api_key:
             st.success("Cohere key detected. Assistant is ready.")
         else:
-            st.warning("Set COHERE_API_KEY in .env or Streamlit secrets.")
+            st.warning("Cohere key not found in .env or Streamlit secrets.")
 
-        with st.expander("Chat Settings", expanded=False):
-            cohere_model = st.text_input("Cohere model", value="command-r-plus-08-2024", key="cohere_model")
-            cohere_temperature = st.slider("Temperature", min_value=0.0, max_value=1.5, value=0.7, step=0.1, key="cohere_temp")
-            cohere_max_tokens = st.slider("Max output tokens", min_value=128, max_value=1200, value=450, step=32, key="cohere_max_tokens")
+        if "chat_history" not in st.session_state:
+            st.session_state["chat_history"] = []
+        if "cohere_model" not in st.session_state:
+            st.session_state["cohere_model"] = "command-r-plus-08-2024"
+        if "cohere_temperature" not in st.session_state:
+            st.session_state["cohere_temperature"] = 0.7
+        if "cohere_max_tokens" not in st.session_state:
+            st.session_state["cohere_max_tokens"] = 450
 
-        if "cohere_chat_messages" not in st.session_state:
-            st.session_state["cohere_chat_messages"] = []
+        with st.expander("Chat Settings", expanded=True):
+            st.selectbox(
+                "Cohere model",
+                [
+                    "command-r-plus-08-2024",
+                    "command-a-03-2025",
+                    "command-r7b-12-2024",
+                ],
+                key="cohere_model",
+            )
+            st.slider("Temperature", 0.0, 1.0, key="cohere_temperature", step=0.05)
+            st.slider("Max output tokens", 100, 2000, key="cohere_max_tokens", step=50)
 
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            if st.button("Use starter question"):
-                st.session_state["cohere_pending_prompt"] = "Give me some image and 3D model ideas for a collectible figurine series."
-        with col_b:
-            if st.button("Clear chat"):
-                st.session_state["cohere_chat_messages"] = []
-                st.session_state.pop("cohere_pending_prompt", None)
-                st.rerun()
+        cols = st.columns(2)
+        with cols[0]:
+            if st.button("Use starter question", key="starter_question"):
+                st.session_state["chat_input"] = "Give me 5 creative image ideas that convert well into printable 3D figurines."
+        with cols[1]:
+            if st.button("Clear chat", key="clear_chat"):
+                st.session_state["chat_history"] = []
 
-        for msg in st.session_state["cohere_chat_messages"]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+        user_input = st.text_input(
+            "Ask the assistant anything about image + 3D concept ideas",
+            key="chat_input",
+            placeholder="Example: Suggest a stylized creature concept with clean silhouette for 3D conversion.",
+        )
+        if st.button("Send", key="send_chat"):
+            if not user_input.strip():
+                st.info("Type a prompt first.")
+            elif not cohere_api_key:
+                st.error("Set a Cohere API key in .env (COHERE_API_KEY is recommended).")
+            else:
+                try:
+                    history = st.session_state["chat_history"]
+                    selected_model = st.session_state.get("cohere_model", "command-a-03-2025")
+                    temperature = st.session_state.get("cohere_temperature", 0.7)
+                    max_tokens = st.session_state.get("cohere_max_tokens", 450)
+                    model_candidates = [
+                        selected_model,
+                        "command-r-plus-08-2024",
+                        "command-a-03-2025",
+                        "command-r7b-12-2024",
+                    ]
+                    # Preserve order while deduplicating.
+                    model_candidates = list(dict.fromkeys(model_candidates))
 
-        prompt_input = st.chat_input("Ask the assistant anything about image + 3D concept ideas")
-        if not prompt_input and st.session_state.get("cohere_pending_prompt"):
-            prompt_input = st.session_state.pop("cohere_pending_prompt")
+                    last_error = None
+                    answer = ""
+                    for model_name in model_candidates:
+                        try:
+                            with st.spinner("Assistant is thinking..."):
+                                answer = get_cohere_response(
+                                    api_key=cohere_api_key,
+                                    user_input=user_input,
+                                    history=history,
+                                    model_name=model_name,
+                                    temperature=temperature,
+                                    max_tokens=max_tokens,
+                                )
+                            if answer:
+                                st.session_state["cohere_model"] = model_name
+                                break
+                        except Exception as exc:
+                            last_error = exc
 
-        if prompt_input:
-            st.session_state["cohere_chat_messages"].append({"role": "user", "content": prompt_input})
-            with st.chat_message("user"):
-                st.markdown(prompt_input)
+                    if not answer and last_error:
+                        raise last_error
 
-            with st.chat_message("assistant"):
-                if not cohere_key_loaded:
-                    assistant_reply = "I could not find a Cohere API key. Please add COHERE_API_KEY to .env or Streamlit secrets."
-                    st.error(assistant_reply)
-                else:
-                    try:
-                        with st.spinner("Thinking..."):
-                            system_instruction = (
-                                "You are an expert creative assistant for an image-to-3D app. "
-                                "Give concise, practical ideas for prompts, style directions, "
-                                "and 3D production tips."
-                            )
-                            api_messages = [{"role": "system", "content": system_instruction}] + st.session_state["cohere_chat_messages"]
-                            assistant_reply = cohere_chat(
-                                messages=api_messages,
-                                model=cohere_model,
-                                temperature=cohere_temperature,
-                                max_tokens=cohere_max_tokens,
-                            )
-                        st.markdown(assistant_reply)
-                    except Exception as exc:
-                        assistant_reply = f"Chat request failed: {exc}"
-                        st.error(assistant_reply)
+                    if not answer:
+                        answer = "I could not generate a response. Please try again."
 
-            st.session_state["cohere_chat_messages"].append({"role": "assistant", "content": assistant_reply})
+                    st.session_state["chat_history"].append({"role": "user", "content": user_input})
+                    st.session_state["chat_history"].append({"role": "assistant", "content": answer})
+                    st.session_state["chat_input"] = ""
+                except Exception as exc:
+                    st.error(f"Cohere chat failed: {exc}")
+
+        for msg in st.session_state["chat_history"]:
+            label = "You" if msg["role"] == "user" else "Assistant"
+            st.markdown(f"**{label}:** {msg['content']}")
 
 
 def get_openai_client():

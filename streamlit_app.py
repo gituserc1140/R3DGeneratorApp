@@ -242,7 +242,40 @@ def persist_glb_in_session(glb_path):
     st.session_state["glb_path"] = glb_path
     st.session_state["glb_bytes"] = glb_bytes
     st.session_state["glb_name"] = os.path.basename(glb_path)
+    st.session_state.pop("conversion_obj_bytes", None)
+    st.session_state.pop("conversion_stl_bytes", None)
+    st.session_state.pop("conversion_source_name", None)
     update_snapshot_preview(glb_path)
+
+
+def load_glb_as_mesh(glb_path):
+    """Load a GLB and normalize it to a single mesh for format export."""
+    loaded = trimesh.load(glb_path, force="scene")
+
+    if isinstance(loaded, trimesh.Trimesh):
+        mesh = loaded
+    elif isinstance(loaded, trimesh.Scene):
+        scene_meshes = [geometry for geometry in loaded.geometry.values() if isinstance(geometry, trimesh.Trimesh)]
+        if not scene_meshes:
+            raise ValueError("No mesh geometry found in GLB file")
+        mesh = trimesh.util.concatenate(scene_meshes) if len(scene_meshes) > 1 else scene_meshes[0].copy()
+    else:
+        raise ValueError("Unsupported GLB content")
+
+    if mesh.faces is None or len(mesh.faces) == 0:
+        raise ValueError("GLB mesh has no faces to export")
+
+    return mesh
+
+
+def export_mesh_bytes(mesh, file_type):
+    """Export a trimesh mesh to bytes for Streamlit download buttons."""
+    payload = mesh.export(file_type=file_type)
+    if isinstance(payload, str):
+        return payload.encode("utf-8")
+    if isinstance(payload, bytes):
+        return payload
+    raise ValueError(f"Unsupported export payload for {file_type}")
 
 
 def get_session_glb_path():
@@ -408,7 +441,7 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Image Generation", "3D Model Generation", "3D File Viewer", "Conversion"])
 
     with tab1:
         st.caption("Remember to check API usage!")
@@ -530,6 +563,74 @@ installButton.addEventListener('click', async () => {
                 )
         else:
             st.info("Upload a .glb file here or generate one in the 3D Model Generation tab.")
+
+    with tab4:
+        st.caption("Convert the current GLB model to OBJ and/or STL.")
+        conversion_upload = st.file_uploader("Upload a GLB for conversion (optional)", type=["glb"], key="conversion_glb_upload")
+
+        if conversion_upload:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
+            tmp.write(conversion_upload.read())
+            tmp.close()
+            persist_glb_in_session(tmp.name)
+
+        current_glb_path = get_session_glb_path()
+        if current_glb_path and os.path.exists(current_glb_path):
+            source_name = st.session_state.get("glb_name", os.path.basename(current_glb_path))
+            st.write(f"Current GLB source: {source_name}")
+
+            target_formats = st.multiselect(
+                "Select target formats",
+                ["OBJ", "STL"],
+                default=["OBJ"],
+                key="conversion_target_formats",
+            )
+
+            if st.button("Convert Model", key="convert_glb_model"):
+                if not target_formats:
+                    st.warning("Select at least one target format.")
+                else:
+                    with st.spinner("Converting model..."):
+                        try:
+                            mesh = load_glb_as_mesh(current_glb_path)
+                            if "OBJ" in target_formats:
+                                st.session_state["conversion_obj_bytes"] = export_mesh_bytes(mesh, "obj")
+                            else:
+                                st.session_state.pop("conversion_obj_bytes", None)
+
+                            if "STL" in target_formats:
+                                st.session_state["conversion_stl_bytes"] = export_mesh_bytes(mesh, "stl")
+                            else:
+                                st.session_state.pop("conversion_stl_bytes", None)
+
+                            st.session_state["conversion_source_name"] = source_name
+                            st.success("Conversion complete. Download your file(s) below.")
+                        except Exception as exc:
+                            st.error(f"Conversion failed: {exc}")
+
+            base_name = os.path.splitext(st.session_state.get("conversion_source_name", source_name))[0]
+
+            obj_bytes = st.session_state.get("conversion_obj_bytes")
+            if obj_bytes:
+                st.download_button(
+                    "Download OBJ",
+                    obj_bytes,
+                    file_name=f"{base_name}.obj",
+                    mime="model/obj",
+                    key="download_converted_obj",
+                )
+
+            stl_bytes = st.session_state.get("conversion_stl_bytes")
+            if stl_bytes:
+                st.download_button(
+                    "Download STL",
+                    stl_bytes,
+                    file_name=f"{base_name}.stl",
+                    mime="model/stl",
+                    key="download_converted_stl",
+                )
+        else:
+            st.info("Upload a .glb file here, or generate one in the 3D Model Generation tab.")
 
 
 def get_openai_client():

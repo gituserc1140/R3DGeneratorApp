@@ -726,7 +726,7 @@ installButton.addEventListener('click', async () => {
         st.markdown(
             """
             <div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.15rem;">
-                <span style="display:inline-flex;align-items:center;justify-content:center;width:1.25rem;height:1.25rem;border-radius:0.35rem;background:#e0f2fe;border:1px solid #bae6fd;font-size:0.82rem;">🤖</span>
+                <span style="display:inline-flex;align-items:center;justify-content:center;width:1.25rem;height:1.25rem;border-radius:0.35rem;background:#e0f2fe;border:1px solid #bae6fd;font-size:0.82rem;">🖼️</span>
                 <span style="font-size:0.92rem;color:#475569;">Ask the assistant for image prompts, styling ideas, and model concepts.</span>
             </div>
             """,

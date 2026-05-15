@@ -732,12 +732,21 @@ installButton.addEventListener('click', async () => {
 
         if "chat_history" not in st.session_state:
             st.session_state["chat_history"] = []
+        if "chat_input" not in st.session_state:
+            st.session_state["chat_input"] = ""
+        if "chat_input_next" not in st.session_state:
+            st.session_state["chat_input_next"] = None
         if "cohere_model" not in st.session_state:
             st.session_state["cohere_model"] = "command-r-plus-08-2024"
         if "cohere_temperature" not in st.session_state:
             st.session_state["cohere_temperature"] = 0.7
         if "cohere_max_tokens" not in st.session_state:
             st.session_state["cohere_max_tokens"] = 450
+
+        # Apply pending chat input updates before the widget is instantiated.
+        if st.session_state["chat_input_next"] is not None:
+            st.session_state["chat_input"] = st.session_state["chat_input_next"]
+            st.session_state["chat_input_next"] = None
 
         with st.expander("Chat Settings", expanded=True):
             st.selectbox(
@@ -755,10 +764,13 @@ installButton.addEventListener('click', async () => {
         cols = st.columns(2)
         with cols[0]:
             if st.button("Use starter question", key="starter_question"):
-                st.session_state["chat_input"] = "Give me 5 creative image ideas that convert well into printable 3D figurines."
+                st.session_state["chat_input_next"] = "Give me 5 creative image ideas that convert well into printable 3D figurines."
+                st.rerun()
         with cols[1]:
             if st.button("Clear chat", key="clear_chat"):
                 st.session_state["chat_history"] = []
+                st.session_state["chat_input_next"] = ""
+                st.rerun()
 
         user_input = st.text_input(
             "Ask the assistant anything about image + 3D concept ideas",
@@ -812,7 +824,8 @@ installButton.addEventListener('click', async () => {
 
                     st.session_state["chat_history"].append({"role": "user", "content": user_input})
                     st.session_state["chat_history"].append({"role": "assistant", "content": answer})
-                    st.session_state["chat_input"] = ""
+                    st.session_state["chat_input_next"] = ""
+                    st.rerun()
                 except Exception as exc:
                     st.error(f"Cohere chat failed: {exc}")
 

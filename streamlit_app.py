@@ -726,7 +726,16 @@ installButton.addEventListener('click', async () => {
         st.markdown(
             """
             <div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.15rem;">
-                <span style="display:inline-flex;align-items:center;justify-content:center;width:1.25rem;height:1.25rem;border-radius:0.35rem;background:#e0f2fe;border:1px solid #bae6fd;font-size:0.82rem;">🖼️</span>
+                <span style="display:inline-flex;align-items:center;justify-content:center;width:1.25rem;height:1.25rem;border-radius:0.35rem;background:#e0f2fe;border:1px solid #bae6fd;overflow:hidden;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <rect x="4" y="7" width="16" height="12" rx="3" stroke="#0369a1" stroke-width="1.7"/>
+                        <circle cx="9" cy="13" r="1.4" fill="#0284c7"/>
+                        <circle cx="15" cy="13" r="1.4" fill="#0284c7"/>
+                        <rect x="10" y="16.2" width="4" height="1.6" rx="0.8" fill="#0284c7"/>
+                        <path d="M12 3.8V7" stroke="#0369a1" stroke-width="1.7" stroke-linecap="round"/>
+                        <circle cx="12" cy="3" r="1.2" fill="#0369a1"/>
+                    </svg>
+                </span>
                 <span style="font-size:0.92rem;color:#475569;">Ask the assistant for image prompts, styling ideas, and model concepts.</span>
             </div>
             """,

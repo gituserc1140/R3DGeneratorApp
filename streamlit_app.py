@@ -512,7 +512,7 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4_obj, tab4_stl, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4_obj, tab4_stl, tab5, tab6, tab7 = st.tabs([
         "Image Generation",
         "3D Model Generation",
         "3D File Viewer",
@@ -520,6 +520,7 @@ installButton.addEventListener('click', async () => {
         "Convert to STL",
         "AI Chat Assistant",
         "Blog Writer (Cohere)",
+        "Links",
     ])
 
     def sanitize_filename(name):
@@ -947,6 +948,45 @@ installButton.addEventListener('click', async () => {
                 mime="text/markdown",
                 key="download_blog_markdown",
             )
+
+    with tab7:
+        st.subheader("Links")
+        st.caption("Quick links to tools for writing, ecommerce, and 3D creation.")
+
+        links = [
+            ("Canva", "https://www.canva.com"),
+            ("Medium", "https://medium.com"),
+            ("ChatGPT", "https://chatgpt.com"),
+            ("Claude", "https://claude.ai"),
+            ("Shopify", "https://www.shopify.com"),
+            ("Printful", "https://www.printful.com"),
+            ("Etsy", "https://www.etsy.com"),
+            ("Tinkercad", "https://www.tinkercad.com"),
+        ]
+
+        cols = st.columns(3)
+        for idx, (label, url) in enumerate(links):
+            with cols[idx % 3]:
+                if hasattr(st, "link_button"):
+                    st.link_button(label, url, use_container_width=True)
+                else:
+                    st.markdown(f"[{label}]({url})")
+
+        st.markdown("### API Links")
+        st.caption("Direct access to API platforms and docs.")
+        api_links = [
+            ("Stability API", "https://platform.stability.ai"),
+            ("OpenAI API", "https://platform.openai.com"),
+            ("Cohere API", "https://docs.cohere.com"),
+        ]
+
+        api_cols = st.columns(3)
+        for idx, (label, url) in enumerate(api_links):
+            with api_cols[idx % 3]:
+                if hasattr(st, "link_button"):
+                    st.link_button(label, url, use_container_width=True)
+                else:
+                    st.markdown(f"[{label}]({url})")
 
 
 def get_openai_client():

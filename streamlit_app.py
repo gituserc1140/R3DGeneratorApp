@@ -512,13 +512,14 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4_obj, tab4_stl, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4_obj, tab4_stl, tab5, tab6 = st.tabs([
         "Image Generation",
         "3D Model Generation",
         "3D File Viewer",
         "Convert to OBJ",
         "Convert to STL",
         "AI Chat Assistant",
+        "Blog Writer (Cohere)",
     ])
 
     def sanitize_filename(name):
@@ -849,6 +850,103 @@ installButton.addEventListener('click', async () => {
         for msg in st.session_state["chat_history"]:
             label = "You" if msg["role"] == "user" else "Assistant"
             st.markdown(f"**{label}:** {msg['content']}")
+
+    with tab6:
+        st.subheader("Cohere Blog Writer")
+        st.caption("Ask Cohere a question and generate a structured blog draft in Markdown.")
+
+        cohere_api_key = get_cohere_api_key()
+        if cohere_api_key:
+            st.success("Cohere key detected. Blog writer is ready.")
+        else:
+            st.warning("Cohere key not found in .env or Streamlit secrets.")
+
+        if "blog_question" not in st.session_state:
+            st.session_state["blog_question"] = "How can small studios use AI to speed up 3D concept workflows?"
+        if "blog_audience" not in st.session_state:
+            st.session_state["blog_audience"] = "Indie creators and hobby makers"
+        if "blog_tone" not in st.session_state:
+            st.session_state["blog_tone"] = "Practical and friendly"
+        if "blog_length" not in st.session_state:
+            st.session_state["blog_length"] = 900
+        if "blog_include_outline" not in st.session_state:
+            st.session_state["blog_include_outline"] = True
+        if "blog_output" not in st.session_state:
+            st.session_state["blog_output"] = ""
+        if "blog_model" not in st.session_state:
+            st.session_state["blog_model"] = "command-r-plus-08-2024"
+
+        st.selectbox(
+            "Cohere model",
+            [
+                "command-r-plus-08-2024",
+                "command-a-03-2025",
+                "command-r7b-12-2024",
+            ],
+            key="blog_model",
+        )
+        st.text_area(
+            "Question or topic for the blog",
+            key="blog_question",
+            placeholder="Example: What are the best ways to create 3D-printable character concepts from text prompts?",
+            height=100,
+        )
+        st.text_input("Target audience", key="blog_audience")
+        st.text_input("Tone", key="blog_tone")
+        st.slider("Target word count", min_value=300, max_value=2000, step=100, key="blog_length")
+        st.checkbox("Include a short outline at the top", key="blog_include_outline")
+
+        if st.button("Generate Blog Draft", key="generate_blog_draft"):
+            if not st.session_state["blog_question"].strip():
+                st.info("Add a question or topic first.")
+            elif not cohere_api_key:
+                st.error("Set a Cohere API key in .env (COHERE_API_KEY is recommended).")
+            else:
+                try:
+                    include_outline = "yes" if st.session_state.get("blog_include_outline") else "no"
+                    user_prompt = (
+                        "You are a senior technical blog writer. Write a clear, engaging Markdown blog post.\\n"
+                        f"Primary question/topic: {st.session_state.get('blog_question', '').strip()}\\n"
+                        f"Target audience: {st.session_state.get('blog_audience', '').strip()}\\n"
+                        f"Tone: {st.session_state.get('blog_tone', '').strip()}\\n"
+                        f"Target length: about {int(st.session_state.get('blog_length', 900))} words\\n"
+                        f"Include a short outline first: {include_outline}\\n\\n"
+                        "Return Markdown only with this structure:\\n"
+                        "1) Title\\n"
+                        "2) (Optional) Outline\\n"
+                        "3) Introduction\\n"
+                        "4) Main sections with H2/H3 headings\\n"
+                        "5) Conclusion with practical next steps\\n"
+                        "Keep the content actionable and include concrete examples where useful."
+                    )
+
+                    with st.spinner("Generating blog draft with Cohere..."):
+                        blog_text = get_cohere_response(
+                            api_key=cohere_api_key,
+                            user_input=user_prompt,
+                            history=[],
+                            model_name=st.session_state.get("blog_model", "command-r-plus-08-2024"),
+                            temperature=0.6,
+                            max_tokens=1800,
+                        )
+
+                    st.session_state["blog_output"] = blog_text
+                    st.success("Blog draft generated.")
+                except Exception as exc:
+                    st.error(f"Blog generation failed: {exc}")
+
+        blog_output = st.session_state.get("blog_output", "")
+        if blog_output:
+            st.markdown("### Draft Preview")
+            st.markdown(blog_output)
+            blog_name = sanitize_filename(st.session_state.get("blog_question", "blog-draft")[:60]) or "blog-draft"
+            st.download_button(
+                "Download Blog Markdown",
+                data=blog_output,
+                file_name=f"{blog_name}.md",
+                mime="text/markdown",
+                key="download_blog_markdown",
+            )
 
 
 def get_openai_client():

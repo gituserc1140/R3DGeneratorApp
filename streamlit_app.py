@@ -961,6 +961,10 @@ installButton.addEventListener('click', async () => {
             st.warning("Cohere key not found in .env or Streamlit secrets.")
 
         _STYLE_PRESETS = {
+            "As Simple As Possible": (
+                "extremely simple and minimal style optimised for clean 3D model conversion",
+                "single object centered on a plain white background, basic geometric shapes only, no fine detail, no accessories, no background elements, solid flat colors, even neutral lighting, nothing that would confuse a 3D mesh generator",
+            ),
             "Simple & Cartoony": (
                 "simple, playful cartoon style",
                 "rounded shapes, smooth surfaces, toy-like proportions, bright but limited colors, soft even lighting, no complex details",
@@ -990,7 +994,7 @@ installButton.addEventListener('click', async () => {
         if "prompt_examples_audience" not in st.session_state:
             st.session_state["prompt_examples_audience"] = "3D artists, illustrators, and hobby makers"
         if "prompt_style_preset" not in st.session_state:
-            st.session_state["prompt_style_preset"] = "Simple & Cartoony"
+            st.session_state["prompt_style_preset"] = "As Simple As Possible"
         if "prompt_style_custom" not in st.session_state:
             st.session_state["prompt_style_custom"] = ""
         if "prompt_examples_output" not in st.session_state:

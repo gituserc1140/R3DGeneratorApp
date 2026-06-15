@@ -1108,6 +1108,7 @@ installButton.addEventListener('click', async () => {
             ("Printful", "https://www.printful.com"),
             ("Etsy", "https://www.etsy.com"),
             ("Tinkercad", "https://www.tinkercad.com"),
+            ("Cults3D", "https://cults3d.com"),
         ]
 
         cols = st.columns(3)

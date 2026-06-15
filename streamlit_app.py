@@ -512,13 +512,14 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4_obj, tab4_stl, tab5, tab6, tab7 = st.tabs([
+    tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl, tab_blog, tab_links = st.tabs([
+        "3D Model Prompt Ideas (Cohere)",
+        "AI Chat Assistant",
         "Image Generation",
         "3D Model Generation",
         "3D File Viewer",
         "Convert to OBJ",
         "Convert to STL",
-        "AI Chat Assistant",
         "Blog Writer (Cohere)",
         "Links",
     ])
@@ -724,7 +725,7 @@ installButton.addEventListener('click', async () => {
         else:
             st.info("Upload a .glb file here, or generate one in the 3D Model Generation tab.")
 
-    with tab5:
+    with tab_chat:
         st.markdown(
             """
             <div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.15rem;">
@@ -852,7 +853,7 @@ installButton.addEventListener('click', async () => {
             label = "You" if msg["role"] == "user" else "Assistant"
             st.markdown(f"**{label}:** {msg['content']}")
 
-    with tab6:
+    with tab_blog:
         st.subheader("Cohere Blog Writer")
         st.caption("Ask Cohere a question and generate a structured blog draft in Markdown.")
 
@@ -949,7 +950,148 @@ installButton.addEventListener('click', async () => {
                 key="download_blog_markdown",
             )
 
-    with tab7:
+    with tab_prompt:
+        st.subheader("3D Image Prompt Ideas (Cohere)")
+        st.caption("Enter a topic and a visual style to generate 3D image prompt ideas.")
+
+        cohere_api_key = get_cohere_api_key()
+        if cohere_api_key:
+            st.success("Cohere key detected. Prompt ideas are ready.")
+        else:
+            st.warning("Cohere key not found in .env or Streamlit secrets.")
+
+        _STYLE_PRESETS = {
+            "Simple & Cartoony": (
+                "simple, playful cartoon style",
+                "rounded shapes, smooth surfaces, toy-like proportions, bright but limited colors, soft even lighting, no complex details",
+            ),
+            "Realistic & Detailed": (
+                "photorealistic and highly detailed style",
+                "accurate proportions, fine surface detail, realistic materials and textures, natural lighting with shadows",
+            ),
+            "Low-poly / Stylized": (
+                "low-poly stylized style",
+                "flat shaded geometric facets, minimal color palette, clean silhouette, isometric-friendly proportions",
+            ),
+            "Sci-fi / Futuristic": (
+                "sci-fi futuristic style",
+                "sleek hard-surface forms, metallic and glowing materials, neon accent colors, dramatic rim lighting",
+            ),
+            "Hand-crafted / Clay": (
+                "hand-crafted clay or stop-motion style",
+                "slightly imperfect organic shapes, matte clay-like surfaces, warm studio lighting, tactile texture cues",
+            ),
+        }
+
+        if "prompt_topic" not in st.session_state:
+            st.session_state["prompt_topic"] = ""
+        if "prompt_examples_count" not in st.session_state:
+            st.session_state["prompt_examples_count"] = 5
+        if "prompt_examples_audience" not in st.session_state:
+            st.session_state["prompt_examples_audience"] = "3D artists, illustrators, and hobby makers"
+        if "prompt_style_preset" not in st.session_state:
+            st.session_state["prompt_style_preset"] = "Simple & Cartoony"
+        if "prompt_style_custom" not in st.session_state:
+            st.session_state["prompt_style_custom"] = ""
+        if "prompt_examples_output" not in st.session_state:
+            st.session_state["prompt_examples_output"] = ""
+        if "prompt_examples_model" not in st.session_state:
+            st.session_state["prompt_examples_model"] = "command-r-plus-08-2024"
+
+        st.selectbox(
+            "Cohere model",
+            [
+                "command-r-plus-08-2024",
+                "command-a-03-2025",
+                "command-r7b-12-2024",
+            ],
+            key="prompt_examples_model",
+        )
+        st.text_area(
+            "Topic for 3D image ideas",
+            key="prompt_topic",
+            placeholder="Example: a friendly robot baker with rounded shapes and bright colors",
+            height=100,
+        )
+        st.selectbox(
+            "Visual style",
+            list(_STYLE_PRESETS.keys()) + ["Custom…"],
+            key="prompt_style_preset",
+        )
+        if st.session_state.get("prompt_style_preset") == "Custom…":
+            st.text_input(
+                "Describe your custom style",
+                key="prompt_style_custom",
+                placeholder="Example: dark fantasy with mossy stone textures and dramatic shadows",
+            )
+        st.text_input("Intended use or audience", key="prompt_examples_audience")
+        st.slider("Number of examples", min_value=3, max_value=10, step=1, key="prompt_examples_count")
+
+        if st.button("Generate 3D Prompt Ideas", key="generate_prompt_examples"):
+            if not st.session_state["prompt_topic"].strip():
+                st.info("Add a topic first.")
+            elif not cohere_api_key:
+                st.error("Set a Cohere API key in .env (COHERE_API_KEY is recommended).")
+            else:
+                try:
+                    chosen_preset = st.session_state.get("prompt_style_preset", "Simple & Cartoony")
+                    if chosen_preset == "Custom…":
+                        custom_style = st.session_state.get("prompt_style_custom", "").strip()
+                        if not custom_style:
+                            st.info("Describe your custom style above first.")
+                            st.stop()
+                        style_desc = custom_style
+                        style_constraints = custom_style
+                        display_name = "Custom"
+                    else:
+                        style_desc, style_constraints = _STYLE_PRESETS.get(
+                            chosen_preset, _STYLE_PRESETS["Simple & Cartoony"]
+                        )
+                        display_name = chosen_preset
+                    user_prompt = (
+                        f"You are an expert 3D image prompt engineer. Generate prompt ideas for creating 3D images in a {style_desc}.\n"
+                        f"Topic: {st.session_state.get('prompt_topic', '').strip()}\n"
+                        f"Intended use or audience: {st.session_state.get('prompt_examples_audience', '').strip()}\n"
+                        f"Visual style: {display_name}\n"
+                        f"Number of examples: {int(st.session_state.get('prompt_examples_count', 5))}\n\n"
+                        "Return Markdown only with this structure:\n"
+                        "1) A short title for each example\n"
+                        "2) A detailed prompt inside a fenced code block\n"
+                        "3) One brief sentence explaining what kind of 3D image it is best for\n\n"
+                        f"Tailor every prompt to the chosen style. Key visual cues to include: {style_constraints}."
+                    )
+
+                    with st.spinner(f"Generating {display_name} 3D prompt ideas with Cohere..."):
+                        prompt_examples_text = get_cohere_response(
+                            api_key=cohere_api_key,
+                            user_input=user_prompt,
+                            history=[],
+                            model_name=st.session_state.get("prompt_examples_model", "command-r-plus-08-2024"),
+                            temperature=0.75,
+                            max_tokens=1800,
+                        )
+
+                    st.session_state["prompt_examples_output"] = prompt_examples_text
+                    st.success(f"{display_name} 3D prompt ideas generated.")
+                except Exception as exc:
+                    st.error(f"3D prompt generation failed: {exc}")
+
+        prompt_examples_output = st.session_state.get("prompt_examples_output", "")
+        if prompt_examples_output:
+            chosen_preset = st.session_state.get("prompt_style_preset", "Simple & Cartoony")
+            display_name = "Custom" if chosen_preset == "Custom…" else chosen_preset
+            st.markdown(f"### Generated {display_name} 3D Prompt Ideas")
+            st.markdown(prompt_examples_output)
+            prompt_name = sanitize_filename(st.session_state.get("prompt_topic", "prompt-ideas")[:60]) or "prompt-ideas"
+            st.download_button(
+                "Download Prompt Ideas Markdown",
+                data=prompt_examples_output,
+                file_name=f"{prompt_name}.md",
+                mime="text/markdown",
+                key="download_prompt_examples_markdown",
+            )
+
+    with tab_links:
         st.subheader("Links")
         st.caption("Quick links to tools for writing, ecommerce, and 3D creation.")
 

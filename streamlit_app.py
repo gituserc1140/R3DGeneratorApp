@@ -6,9 +6,11 @@ import io
 import math
 import base64
 
+import numpy as np
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import trimesh
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw
@@ -195,6 +197,7 @@ def show_preview_mode_badge(mode):
     """Display a compact badge indicating the active preview mode."""
     palette = {
         "Interactive": ("#166534", "#dcfce7", "#bbf7d0"),
+        "Physical": ("#991b1b", "#fee2e2", "#fecaca"),
         "Static": ("#7c2d12", "#ffedd5", "#fed7aa"),
     }
     text_color, bg_color, border_color = palette.get(mode, ("#0f172a", "#e2e8f0", "#cbd5e1"))
@@ -209,8 +212,97 @@ def show_preview_mode_badge(mode):
     )
 
 
-def build_plotly_figure(glb_path):
+def get_default_viewer_settings():
+    """Return default interactive viewer settings."""
+    return {
+        "max_faces": 60000,
+        "normalize": True,
+        "wireframe": False,
+        "wireframe_limit": 12000,
+        "ambient": 0.45,
+        "diffuse": 0.85,
+        "specular": 0.28,
+        "roughness": 0.62,
+        "flatshading": False,
+        "bg_color": "#f8fafc",
+        "camera_preset": "Isometric",
+        "projection": "perspective",
+        "show_axes": False,
+    }
+
+
+def _camera_eye_from_preset(name):
+    """Map a friendly camera preset name to a Plotly camera eye vector."""
+    presets = {
+        "Isometric": {"x": 1.8, "y": 1.8, "z": 1.2},
+        "Front": {"x": 0.0, "y": 2.5, "z": 0.2},
+        "Top": {"x": 0.01, "y": 0.01, "z": 2.8},
+        "Left": {"x": -2.5, "y": 0.1, "z": 0.2},
+    }
+    return presets.get(name, presets["Isometric"])
+
+
+def _downsample_faces(faces, max_faces):
+    """Reduce face count deterministically for smoother browser rendering."""
+    if len(faces) <= max_faces:
+        return faces
+    step = max(1, int(math.ceil(len(faces) / max_faces)))
+    sampled = faces[::step]
+    if len(sampled) > max_faces:
+        sampled = sampled[:max_faces]
+    return sampled
+
+
+def _normalize_vertices(vertices):
+    """Center and scale vertices to keep camera framing consistent across models."""
+    mins = vertices.min(axis=0)
+    maxs = vertices.max(axis=0)
+    center = (mins + maxs) / 2.0
+    extent = float((maxs - mins).max())
+    if extent <= 1e-9:
+        extent = 1.0
+    return (vertices - center) / extent
+
+
+def _build_wireframe_trace(vertices, faces, edge_limit):
+    """Build an optional wireframe overlay trace with bounded edge count."""
+    edges = set()
+    for a, b, c in faces:
+        for u, v in ((a, b), (b, c), (c, a)):
+            edge = (int(u), int(v)) if u <= v else (int(v), int(u))
+            if edge not in edges:
+                edges.add(edge)
+            if len(edges) >= edge_limit:
+                break
+        if len(edges) >= edge_limit:
+            break
+
+    if not edges:
+        return None
+
+    xs = []
+    ys = []
+    zs = []
+    for u, v in edges:
+        xs.extend([vertices[u, 0], vertices[v, 0], None])
+        ys.extend([vertices[u, 1], vertices[v, 1], None])
+        zs.extend([vertices[u, 2], vertices[v, 2], None])
+
+    return go.Scatter3d(
+        x=xs,
+        y=ys,
+        z=zs,
+        mode="lines",
+        line={"color": "#111827", "width": 2},
+        hoverinfo="skip",
+        showlegend=False,
+        name="wireframe",
+    )
+
+
+def build_plotly_figure(glb_path, settings=None):
     """Build a Plotly mesh figure from a GLB file."""
+    settings = {**get_default_viewer_settings(), **(settings or {})}
     loaded = trimesh.load(glb_path, force="scene")
     meshes = loaded.dump(concatenate=False) if isinstance(loaded, trimesh.Scene) else [loaded]
 
@@ -223,20 +315,29 @@ def build_plotly_figure(glb_path):
             continue
 
         try:
-            triangles = mesh.triangles
-            if triangles is None or len(triangles) == 0:
+            vertices = np.asarray(mesh.vertices, dtype=float)
+            faces = np.asarray(mesh.faces, dtype=int)
+
+            if vertices.size == 0 or faces.size == 0:
                 failed_meshes += 1
                 continue
-            vertices = triangles.reshape((-1, 3))
-            face_count = len(triangles)
-            faces = [(idx, idx + 1, idx + 2) for idx in range(0, face_count * 3, 3)]
+
+            faces = _downsample_faces(faces, int(settings["max_faces"]))
+
+            used = np.unique(faces.reshape(-1))
+            compact_vertices = vertices[used]
+            remap = {int(old): idx for idx, old in enumerate(used)}
+            compact_faces = np.array([[remap[int(a)], remap[int(b)], remap[int(c)]] for a, b, c in faces], dtype=int)
+
+            if settings.get("normalize", True):
+                compact_vertices = _normalize_vertices(compact_vertices)
         except Exception:
             failed_meshes += 1
             continue
 
-        i = [item[0] for item in faces]
-        j = [item[1] for item in faces]
-        k = [item[2] for item in faces]
+        i = compact_faces[:, 0]
+        j = compact_faces[:, 1]
+        k = compact_faces[:, 2]
         color = "#ff6b6b"
         visual = getattr(mesh, "visual", None)
         material = getattr(visual, "material", None) if visual is not None else None
@@ -247,21 +348,36 @@ def build_plotly_figure(glb_path):
 
         figure.add_trace(
             go.Mesh3d(
-                x=vertices[:, 0],
-                y=vertices[:, 1],
-                z=vertices[:, 2],
+                x=compact_vertices[:, 0],
+                y=compact_vertices[:, 1],
+                z=compact_vertices[:, 2],
                 i=i,
                 j=j,
                 k=k,
                 color=color,
-                flatshading=False,
-                lighting={"ambient": 0.55, "diffuse": 0.85, "specular": 0.2, "roughness": 0.7},
+                flatshading=bool(settings["flatshading"]),
+                lighting={
+                    "ambient": float(settings["ambient"]),
+                    "diffuse": float(settings["diffuse"]),
+                    "specular": float(settings["specular"]),
+                    "roughness": float(settings["roughness"]),
+                },
                 lightposition={"x": 120, "y": 160, "z": 200},
                 hoverinfo="skip",
                 name=os.path.basename(glb_path),
                 showscale=False,
             )
         )
+
+        if settings.get("wireframe"):
+            wire = _build_wireframe_trace(
+                compact_vertices,
+                compact_faces,
+                edge_limit=int(settings["wireframe_limit"]),
+            )
+            if wire is not None:
+                figure.add_trace(wire)
+
         has_geometry = True
 
     if not has_geometry:
@@ -271,25 +387,269 @@ def build_plotly_figure(glb_path):
 
     figure.update_layout(
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        paper_bgcolor="#f8fafc",
+        paper_bgcolor=settings["bg_color"],
         scene={
-            "bgcolor": "#f8fafc",
+            "bgcolor": settings["bg_color"],
             "aspectmode": "data",
-            "xaxis": {"visible": False},
-            "yaxis": {"visible": False},
-            "zaxis": {"visible": False},
-            "camera": {"eye": {"x": 1.8, "y": 1.8, "z": 1.2}},
+            "xaxis": {"visible": bool(settings["show_axes"]), "showgrid": False, "zeroline": False},
+            "yaxis": {"visible": bool(settings["show_axes"]), "showgrid": False, "zeroline": False},
+            "zaxis": {"visible": bool(settings["show_axes"]), "showgrid": False, "zeroline": False},
+            "camera": {
+                "eye": _camera_eye_from_preset(settings["camera_preset"]),
+                "projection": {"type": settings["projection"]},
+            },
         },
         showlegend=False,
     )
     return figure
 
 
+def build_physical_viewer_html(glb_path, exposure=1.0, shadow_intensity=1.0):
+    """Build an embeddable <model-viewer> HTML block for physical PBR rendering."""
+    with open(glb_path, "rb") as file_obj:
+        encoded_glb = base64.b64encode(file_obj.read()).decode("ascii")
+
+    return f"""
+<style>
+    .viewer-shell {{
+        width: 100%;
+        height: 100%;
+        min-height: 560px;
+        border-radius: 14px;
+        border: 1px solid #ef4444;
+        background:
+            radial-gradient(circle at 20% 10%, #fecaca 0%, transparent 45%),
+            radial-gradient(circle at 85% 80%, #ef4444 0%, transparent 42%),
+            linear-gradient(135deg, #7f1d1d 0%, #450a0a 100%);
+        overflow: hidden;
+        position: relative;
+    }}
+    model-viewer {{
+        width: 100%;
+        height: 100%;
+        --poster-color: transparent;
+    }}
+    .viewer-tag {{
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: #fee2e2;
+        background: rgba(69, 10, 10, 0.72);
+        border: 1px solid #f87171;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font: 600 12px/1.2 system-ui, -apple-system, sans-serif;
+        letter-spacing: 0.02em;
+        pointer-events: none;
+    }}
+    .viewer-status {{
+        position: absolute;
+        right: 10px;
+        top: 10px;
+        color: #fee2e2;
+        background: rgba(69, 10, 10, 0.72);
+        border: 1px solid #f87171;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font: 600 12px/1.2 system-ui, -apple-system, sans-serif;
+        letter-spacing: 0.02em;
+        max-width: 75%;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+    }}
+</style>
+<div class="viewer-shell">
+    <div class="viewer-tag">Physical PBR Viewer</div>
+    <div class="viewer-status" id="viewer-status">Loading viewer...</div>
+    <model-viewer
+        id="pbr-model"
+        camera-controls
+        touch-action="pan-y"
+        auto-rotate
+        rotation-per-second="22deg"
+        exposure="{float(exposure):.2f}"
+        shadow-intensity="{float(shadow_intensity):.2f}"
+        environment-image="neutral"
+        tone-mapping="commerce"
+        interaction-prompt="auto"
+        interaction-prompt-style="wiggle"
+        camera-orbit="45deg 70deg auto"
+        min-camera-orbit="auto 15deg 80%"
+        max-camera-orbit="auto 150deg 250%"
+    ></model-viewer>
+</div>
+<script type="module">
+    const base64Data = "{encoded_glb}";
+    const statusEl = document.getElementById("viewer-status");
+    const modelEl = document.getElementById("pbr-model");
+
+    const setStatus = (message) => {{
+        if (statusEl) statusEl.textContent = message;
+    }};
+
+    const ensureModelViewer = async () => {{
+        if (customElements.get("model-viewer")) return true;
+        const moduleUrls = [
+            "https://cdn.jsdelivr.net/npm/@google/model-viewer/dist/model-viewer.min.js",
+            "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js",
+        ];
+        for (const moduleUrl of moduleUrls) {{
+            try {{
+                await import(moduleUrl);
+                if (customElements.get("model-viewer")) return true;
+            }} catch (err) {{
+                // Try the next CDN.
+            }}
+        }}
+        return false;
+    }};
+
+    const base64ToBlobUrl = (payload) => {{
+        const binary = atob(payload);
+        const bytes = new Uint8Array(binary.length);
+        for (let idx = 0; idx < binary.length; idx += 1) {{
+            bytes[idx] = binary.charCodeAt(idx);
+        }}
+        const blob = new Blob([bytes], {{ type: "model/gltf-binary" }});
+        return URL.createObjectURL(blob);
+    }};
+
+    try {{
+        setStatus("Loading model-viewer library...");
+        const libLoaded = await ensureModelViewer();
+        if (!libLoaded) {{
+            setStatus("Failed to load model-viewer library");
+            throw new Error("model-viewer library unavailable");
+        }}
+
+        setStatus("Preparing GLB...");
+        const objectUrl = base64ToBlobUrl(base64Data);
+
+        modelEl.addEventListener("load", () => setStatus("Model loaded"), {{ once: true }});
+        modelEl.addEventListener("error", () => setStatus("Model failed to load"), {{ once: true }});
+        modelEl.src = objectUrl;
+    }} catch (error) {{
+        setStatus("Viewer error");
+        console.error("PBR viewer failed:", error);
+    }}
+</script>
+"""
+
+
 def display_3d_model(glb_path, chart_key=None):
     """Display a 3D GLB model using Plotly as a browser-safe fallback."""
     st.caption(f"Viewing: {os.path.basename(glb_path)}")
+
+    viewer_key = chart_key or "viewer"
+    mode_key = f"{viewer_key}_mode"
+    mode_options = ["Physical (PBR)", "Interactive (Plotly)"]
+    selected_mode = st.radio(
+        "Viewer mode",
+        mode_options,
+        index=0,
+        horizontal=True,
+        key=mode_key,
+    )
+
+    if selected_mode == "Physical (PBR)":
+        show_preview_mode_badge("Physical")
+        st.caption("PBR mode preserves GLB materials and uses studio-style red lighting.")
+        physical_col_a, physical_col_b = st.columns(2)
+        with physical_col_a:
+            exposure = st.slider(
+                "Exposure",
+                min_value=0.2,
+                max_value=2.2,
+                value=float(st.session_state.get(f"{viewer_key}_pbr_exposure", 1.0)),
+                step=0.05,
+                key=f"{viewer_key}_pbr_exposure",
+            )
+        with physical_col_b:
+            shadow_intensity = st.slider(
+                "Shadow intensity",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(st.session_state.get(f"{viewer_key}_pbr_shadow", 1.0)),
+                step=0.05,
+                key=f"{viewer_key}_pbr_shadow",
+            )
+
+        physical_html = build_physical_viewer_html(
+            glb_path,
+            exposure=exposure,
+            shadow_intensity=shadow_intensity,
+        )
+        components.html(physical_html, height=600, scrolling=False)
+        return
+
+    defaults = get_default_viewer_settings()
+    settings = {
+        "max_faces": st.session_state.get(f"{viewer_key}_max_faces", defaults["max_faces"]),
+        "normalize": st.session_state.get(f"{viewer_key}_normalize", defaults["normalize"]),
+        "wireframe": st.session_state.get(f"{viewer_key}_wireframe", defaults["wireframe"]),
+        "wireframe_limit": st.session_state.get(f"{viewer_key}_wireframe_limit", defaults["wireframe_limit"]),
+        "ambient": st.session_state.get(f"{viewer_key}_ambient", defaults["ambient"]),
+        "diffuse": st.session_state.get(f"{viewer_key}_diffuse", defaults["diffuse"]),
+        "specular": st.session_state.get(f"{viewer_key}_specular", defaults["specular"]),
+        "roughness": st.session_state.get(f"{viewer_key}_roughness", defaults["roughness"]),
+        "flatshading": st.session_state.get(f"{viewer_key}_flatshading", defaults["flatshading"]),
+        "bg_color": st.session_state.get(f"{viewer_key}_bg_color", defaults["bg_color"]),
+        "camera_preset": st.session_state.get(f"{viewer_key}_camera_preset", defaults["camera_preset"]),
+        "projection": st.session_state.get(f"{viewer_key}_projection", defaults["projection"]),
+        "show_axes": st.session_state.get(f"{viewer_key}_show_axes", defaults["show_axes"]),
+    }
+
+    with st.expander("Viewer settings", expanded=False):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            settings["max_faces"] = st.slider(
+                "Max faces per mesh",
+                min_value=5000,
+                max_value=220000,
+                value=int(settings["max_faces"]),
+                step=5000,
+                key=f"{viewer_key}_max_faces",
+            )
+            settings["camera_preset"] = st.selectbox(
+                "Camera",
+                ["Isometric", "Front", "Top", "Left"],
+                index=["Isometric", "Front", "Top", "Left"].index(settings["camera_preset"]),
+                key=f"{viewer_key}_camera_preset",
+            )
+            settings["projection"] = st.selectbox(
+                "Projection",
+                ["perspective", "orthographic"],
+                index=["perspective", "orthographic"].index(settings["projection"]),
+                key=f"{viewer_key}_projection",
+            )
+            settings["bg_color"] = st.color_picker(
+                "Background",
+                value=settings["bg_color"],
+                key=f"{viewer_key}_bg_color",
+            )
+        with col_b:
+            settings["ambient"] = st.slider("Ambient light", 0.0, 1.0, float(settings["ambient"]), 0.05, key=f"{viewer_key}_ambient")
+            settings["diffuse"] = st.slider("Diffuse light", 0.0, 1.0, float(settings["diffuse"]), 0.05, key=f"{viewer_key}_diffuse")
+            settings["specular"] = st.slider("Specular", 0.0, 1.0, float(settings["specular"]), 0.05, key=f"{viewer_key}_specular")
+            settings["roughness"] = st.slider("Roughness", 0.0, 1.0, float(settings["roughness"]), 0.05, key=f"{viewer_key}_roughness")
+
+            settings["flatshading"] = st.checkbox("Flat shading", value=bool(settings["flatshading"]), key=f"{viewer_key}_flatshading")
+            settings["normalize"] = st.checkbox("Normalize scale", value=bool(settings["normalize"]), key=f"{viewer_key}_normalize")
+            settings["show_axes"] = st.checkbox("Show axes", value=bool(settings["show_axes"]), key=f"{viewer_key}_show_axes")
+            settings["wireframe"] = st.checkbox("Wireframe overlay", value=bool(settings["wireframe"]), key=f"{viewer_key}_wireframe")
+            if settings["wireframe"]:
+                settings["wireframe_limit"] = st.slider(
+                    "Wireframe edge limit",
+                    min_value=500,
+                    max_value=50000,
+                    value=int(settings["wireframe_limit"]),
+                    step=500,
+                    key=f"{viewer_key}_wireframe_limit",
+                )
+
     try:
-        figure = build_plotly_figure(glb_path)
+        figure = build_plotly_figure(glb_path, settings=settings)
     except Exception as exc:
         show_preview_mode_badge("Static")
         st.warning(f"3D preview failed to load interactively: {exc}")
@@ -301,7 +661,12 @@ def display_3d_model(glb_path, chart_key=None):
         return
 
     show_preview_mode_badge("Interactive")
-    st.plotly_chart(figure, width="stretch", config={"displaylogo": False}, key=chart_key)
+    st.plotly_chart(
+        figure,
+        width="stretch",
+        config={"displaylogo": False, "scrollZoom": True},
+        key=chart_key,
+    )
 
 
 def persist_glb_in_session(glb_path):
@@ -470,7 +835,7 @@ def run_app():
 
     setup_pwa()
 
-    st.title("RKstudio → 🖼️ Image → 🧊 3D Model Generator")
+    st.title("RKstudio3Dps & Ecommerce App → 🖼️ → 🧊")
 
     install_button_html = """
 <div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
@@ -512,7 +877,8 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl, tab_blog, tab_links = st.tabs([
+    tab_details, tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl, tab_blog, tab_links = st.tabs([
+        "Details",
         "3D Model Prompt Ideas (Cohere)",
         "AI Chat Assistant",
         "Image Generation",
@@ -1094,6 +1460,17 @@ installButton.addEventListener('click', async () => {
                 mime="text/markdown",
                 key="download_prompt_examples_markdown",
             )
+
+    with tab_details:
+        st.subheader("Details")
+        st.markdown("""
+- **3D Print Art** — Cults3D, Tinkercad
+- **Ecommerce** — Shopify, TikTok Shop, Printful, Etsy
+- **Social Editing** — Canva, TikTok
+- **Support** — Lark
+- **Blog** — Medium
+- **AI** — ChatGPT, Claude
+""")
 
     with tab_links:
         st.subheader("Links")

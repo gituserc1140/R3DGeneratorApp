@@ -20,7 +20,9 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-**Important:** Never commit API keys to version control. Set environment variables in a local `.env` file (ensure `.env` is in `.gitignore`):
+**Important:** Never commit API keys to version control. Set environment variables in a local `.env` file (ensure `.env` is in `.gitignore`). **Do not commit the `.env` file.**
+
+Example `.env` file:
 
 ```bash
 OPENAI_API_KEY=your_openai_key

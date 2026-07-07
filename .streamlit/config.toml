@@ -1,5 +1,2 @@
 [server]
 enableStaticServing = false
-
-[server.headers]
-contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'"

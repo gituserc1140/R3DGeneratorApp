@@ -542,8 +542,9 @@ def display_3d_model(glb_path, chart_key=None):
     st.caption(f"Viewing: {os.path.basename(glb_path)}")
 
     viewer_key = chart_key or "viewer"
+
     mode_key = f"{viewer_key}_mode"
-    mode_options = ["Physical (PBR)", "Interactive (Plotly)"]
+    mode_options = ["Interactive (Plotly)"]
     selected_mode = st.radio(
         "Viewer mode",
         mode_options,
@@ -552,36 +553,8 @@ def display_3d_model(glb_path, chart_key=None):
         key=mode_key,
     )
 
-    if selected_mode == "Physical (PBR)":
-        show_preview_mode_badge("Physical")
-        st.caption("PBR mode preserves GLB materials and uses studio-style red lighting.")
-        physical_col_a, physical_col_b = st.columns(2)
-        with physical_col_a:
-            exposure = st.slider(
-                "Exposure",
-                min_value=0.2,
-                max_value=2.2,
-                value=float(st.session_state.get(f"{viewer_key}_pbr_exposure", 1.0)),
-                step=0.05,
-                key=f"{viewer_key}_pbr_exposure",
-            )
-        with physical_col_b:
-            shadow_intensity = st.slider(
-                "Shadow intensity",
-                min_value=0.0,
-                max_value=2.0,
-                value=float(st.session_state.get(f"{viewer_key}_pbr_shadow", 1.0)),
-                step=0.05,
-                key=f"{viewer_key}_pbr_shadow",
-            )
-
-        physical_html = build_physical_viewer_html(
-            glb_path,
-            exposure=exposure,
-            shadow_intensity=shadow_intensity,
-        )
-        components.html(physical_html, height=600, scrolling=False)
-        return
+    if selected_mode == "Interactive (Plotly)":
+        show_preview_mode_badge("Interactive")
 
     defaults = get_default_viewer_settings()
     settings = {

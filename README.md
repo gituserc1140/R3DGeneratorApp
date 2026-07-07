@@ -35,8 +35,25 @@ COHERE_API_KEY=your_cohere_key
 Start the app:
 
 ```bash
-streamlit run streamlit_app.py
+streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 ```
+
+To test the local UX prototype mode, set the flag before starting:
+
+```bash
+UX_LAB_MODE=1 streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+This only toggles UI experiments in your local session and does not change Streamlit Cloud behavior.
+
+If ports are not reachable in a dev container or Codespaces, verify:
+
+```bash
+ss -ltnp | grep 8501
+curl -I http://127.0.0.1:8501
+```
+
+The app should listen on `0.0.0.0:8501` and return `HTTP/1.1 200 OK`.
 
 ## Streamlit Cloud
 

@@ -825,6 +825,299 @@ def setup_pwa():
 
     st.markdown(pwa_html, unsafe_allow_html=True)
 
+
+def _env_flag(name, default=False):
+    """Parse a boolean-like environment variable."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _render_ux_lab_panel(default_enabled=False):
+    """Render local UX Lab controls and return (enabled, variant)."""
+    if "ux_lab_enabled" not in st.session_state:
+        st.session_state["ux_lab_enabled"] = bool(default_enabled)
+    if "ux_lab_variant" not in st.session_state:
+        st.session_state["ux_lab_variant"] = "enhanced"
+
+    with st.expander("Local UX Lab (prototype only)", expanded=bool(st.session_state["ux_lab_enabled"])):
+        st.session_state["ux_lab_enabled"] = st.checkbox(
+            "Enable UX test enhancements (local run only)",
+            value=bool(st.session_state["ux_lab_enabled"]),
+            help="This affects only your current session and does not deploy anything.",
+        )
+        if st.session_state["ux_lab_enabled"]:
+            current_index = 1 if st.session_state.get("ux_lab_variant") == "enhanced" else 0
+            variant_label = st.radio(
+                "A/B compare mode",
+                ["A: Current UX", "B: Enhanced UX"],
+                index=current_index,
+                horizontal=True,
+                key="ux_lab_variant_selector",
+            )
+            st.session_state["ux_lab_variant"] = "current" if variant_label.startswith("A:") else "enhanced"
+            st.caption("Use A/B mode to compare baseline flow and UX enhancements in the same session.")
+
+    return bool(st.session_state["ux_lab_enabled"]), str(st.session_state.get("ux_lab_variant", "enhanced"))
+
+
+def sanitize_filename(name):
+    """Sanitize a user-provided filename stem for downloads."""
+    import re
+
+    return re.sub(r"[^\w\-]+", "_", (name or "").strip())
+
+
+def _validate_export_filename(raw_name):
+    """Return lightweight validation details for an export filename."""
+    candidate = (raw_name or "").strip()
+    if not candidate:
+        return {
+            "ok": False,
+            "message": "Filename is empty. A default of 'model' will be used.",
+            "level": "warning",
+        }
+
+    if len(candidate) > 80:
+        return {
+            "ok": False,
+            "message": "Filename is long (>80 chars). Consider shortening for easier downloads.",
+            "level": "warning",
+        }
+
+    safe_candidate = sanitize_filename(candidate)
+    if safe_candidate != candidate:
+        return {
+            "ok": False,
+            "message": "Filename contains unsupported characters; they will be replaced with underscores.",
+            "level": "info",
+        }
+
+    return {"ok": True, "message": "Filename looks good.", "level": "success"}
+
+
+def _validate_vertex_count(value):
+    """Validate Stability vertex count parameter for user guidance."""
+    if value == -1:
+        return {"ok": True, "message": "Auto vertex count enabled.", "level": "success"}
+
+    if value <= 0:
+        return {
+            "ok": False,
+            "message": "Vertex count should be -1 (auto) or a positive integer.",
+            "level": "error",
+        }
+
+    if value < 500:
+        return {
+            "ok": False,
+            "message": "Very low vertex count may reduce quality significantly.",
+            "level": "warning",
+        }
+
+    if value > 200000:
+        return {
+            "ok": False,
+            "message": "Very high vertex count may increase processing time and memory use.",
+            "level": "warning",
+        }
+
+    return {"ok": True, "message": "Vertex count is in a typical range.", "level": "success"}
+
+
+def _estimate_stability_profile(texture_resolution, foreground_ratio, vertex_count, remesh):
+    """Estimate generation quality/performance from selected Stability settings."""
+    quality_score = {"512": 1, "1024": 2, "2048": 3}.get(str(texture_resolution), 2)
+    if float(foreground_ratio) >= 0.75:
+        quality_score += 1
+    if remesh == "quad":
+        quality_score += 1
+    if int(vertex_count) == -1:
+        quality_score += 1
+    elif int(vertex_count) >= 5000:
+        quality_score += 1
+    elif int(vertex_count) < 500:
+        quality_score -= 1
+
+    if quality_score >= 5:
+        quality_label = "High"
+    elif quality_score >= 3:
+        quality_label = "Balanced"
+    else:
+        quality_label = "Fast"
+
+    perf_score = 0
+    if str(texture_resolution) == "2048":
+        perf_score += 2
+    elif str(texture_resolution) == "1024":
+        perf_score += 1
+    if remesh != "none":
+        perf_score += 1
+    if int(vertex_count) > 50000:
+        perf_score += 2
+    elif int(vertex_count) > 0:
+        perf_score += 1
+
+    if perf_score >= 4:
+        performance_label = "Heavy"
+    elif perf_score >= 2:
+        performance_label = "Medium"
+    else:
+        performance_label = "Light"
+
+    return quality_label, performance_label
+
+
+def _init_ux_lab_metrics():
+    """Initialize UX Lab session metrics state once."""
+    if "ux_lab_metrics" not in st.session_state:
+        st.session_state["ux_lab_metrics"] = {
+            "A": {"runs": 0, "success": 0, "fail": 0, "durations": []},
+            "B": {"runs": 0, "success": 0, "fail": 0, "durations": []},
+        }
+
+
+def _record_ux_lab_run(variant_label, success, duration_seconds):
+    """Record one generation attempt for A/B session metrics."""
+    metrics = st.session_state.get("ux_lab_metrics", {})
+    bucket = metrics.get(variant_label)
+    if not bucket:
+        return
+
+    bucket["runs"] += 1
+    if success:
+        bucket["success"] += 1
+    else:
+        bucket["fail"] += 1
+
+    if duration_seconds is not None and duration_seconds >= 0:
+        bucket["durations"].append(round(float(duration_seconds), 2))
+
+
+def _ux_lab_scenarios():
+    """Return the fixed scenario list used for local A/B testing notes."""
+    return [
+        "Missing image flow",
+        "Normal generation (Stability)",
+        "Normal generation (Tripo)",
+        "Invalid vertex count",
+        "Filename special characters",
+        "Apply last successful settings",
+        "Post-generation checklist",
+    ]
+
+
+def _init_ux_lab_scenario_notes():
+    """Initialize per-scenario notes storage in session state."""
+    if "ux_lab_scenario_notes" in st.session_state:
+        return
+
+    st.session_state["ux_lab_scenario_notes"] = {
+        name: {
+            "a_result": "",
+            "b_result": "",
+            "better": "Undecided",
+            "notes": "",
+        }
+        for name in _ux_lab_scenarios()
+    }
+
+
+def _render_ux_lab_scenario_editor():
+    """Render editable per-scenario A/B testing fields."""
+    notes_map = st.session_state.get("ux_lab_scenario_notes", {})
+    with st.expander("Scenario Notes (A/B)", expanded=False):
+        st.caption("Capture outcomes while testing; these rows are included in Copy test summary.")
+        for index, scenario in enumerate(_ux_lab_scenarios(), start=1):
+            scenario_state = notes_map.get(scenario, {"a_result": "", "b_result": "", "better": "Undecided", "notes": ""})
+            st.markdown(f"**{index}. {scenario}**")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                a_result = st.text_input(
+                    "A result",
+                    value=scenario_state.get("a_result", ""),
+                    key=f"ux_scenario_a_{index}",
+                )
+            with col_b:
+                b_result = st.text_input(
+                    "B result",
+                    value=scenario_state.get("b_result", ""),
+                    key=f"ux_scenario_b_{index}",
+                )
+
+            col_c, col_d = st.columns([1, 2])
+            with col_c:
+                better = st.selectbox(
+                    "Better",
+                    ["Undecided", "A", "B", "Tie"],
+                    index=["Undecided", "A", "B", "Tie"].index(scenario_state.get("better", "Undecided")),
+                    key=f"ux_scenario_better_{index}",
+                )
+            with col_d:
+                notes = st.text_input(
+                    "Notes",
+                    value=scenario_state.get("notes", ""),
+                    key=f"ux_scenario_notes_{index}",
+                )
+
+            notes_map[scenario] = {
+                "a_result": a_result,
+                "b_result": b_result,
+                "better": better,
+                "notes": notes,
+            }
+
+
+def _format_ux_lab_summary():
+    """Build a copy-friendly markdown summary for UX testing notes."""
+    metrics = st.session_state.get("ux_lab_metrics", {})
+    lines = [
+        "## UX Lab Session Summary",
+        "",
+        "| Variant | Runs | Success | Fail | Success Rate | Avg Duration (s) |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+
+    for variant in ["A", "B"]:
+        data = metrics.get(variant, {"runs": 0, "success": 0, "fail": 0, "durations": []})
+        runs = int(data.get("runs", 0))
+        success = int(data.get("success", 0))
+        fail = int(data.get("fail", 0))
+        durations = data.get("durations", [])
+        avg_duration = round(sum(durations) / len(durations), 2) if durations else 0.0
+        success_rate = f"{((success / runs) * 100):.1f}%" if runs else "0.0%"
+        label = "A: Current UX" if variant == "A" else "B: Enhanced UX"
+        lines.append(f"| {label} | {runs} | {success} | {fail} | {success_rate} | {avg_duration:.2f} |")
+
+    scenario_notes = st.session_state.get("ux_lab_scenario_notes", {})
+    lines.extend(
+        [
+            "",
+            "### Scenario Outcomes",
+            "| Scenario | A Result | B Result | Better | Notes |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for scenario in _ux_lab_scenarios():
+        row = scenario_notes.get(scenario, {})
+        a_result = (row.get("a_result") or "").replace("|", "/")
+        b_result = (row.get("b_result") or "").replace("|", "/")
+        better = (row.get("better") or "Undecided").replace("|", "/")
+        notes = (row.get("notes") or "").replace("|", "/")
+        lines.append(f"| {scenario} | {a_result} | {b_result} | {better} | {notes} |")
+
+    lines.extend(
+        [
+            "",
+            "### Quick Notes",
+            "- Best-performing variant:",
+            "- Biggest friction point:",
+            "- Recommendation before deploy:",
+        ]
+    )
+    return "\n".join(lines)
+
 def run_app():
     st.set_page_config(
         page_title="Image → 3D Generator",
@@ -836,6 +1129,12 @@ def run_app():
     setup_pwa()
 
     st.title("RKstudio3Dps & Ecommerce App → 🖼️ → 🧊")
+    ux_lab_enabled, ux_lab_variant = _render_ux_lab_panel(default_enabled=_env_flag("UX_LAB_MODE", default=False))
+    ux_lab_enhanced = ux_lab_enabled and ux_lab_variant == "enhanced"
+    ux_variant_label = "B" if ux_lab_enhanced else "A"
+    if ux_lab_enabled:
+        _init_ux_lab_metrics()
+        _init_ux_lab_scenario_notes()
 
     install_button_html = """
 <div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
@@ -890,11 +1189,6 @@ installButton.addEventListener('click', async () => {
         "Links",
     ])
 
-    def sanitize_filename(name):
-        import re
-
-        return re.sub(r"[^\w\-]+", "_", (name or "").strip())
-
     with tab1:
         st.caption("Remember to check API usage!")
         mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0, key="image_mode_select")
@@ -912,8 +1206,63 @@ installButton.addEventListener('click', async () => {
 
     with tab2:
         st.caption("Remember to check API usage!")
+        if ux_lab_enabled:
+            st.caption(f"UX Lab mode: {'Enhanced (B)' if ux_lab_enhanced else 'Current (A)'}")
+            controls_col_a, controls_col_b = st.columns([1, 1])
+            with controls_col_a:
+                if st.button("Copy test summary", key="ux_copy_summary"):
+                    st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+            with controls_col_b:
+                if st.button("Reset session metrics", key="ux_reset_metrics"):
+                    st.session_state["ux_lab_metrics"] = {
+                        "A": {"runs": 0, "success": 0, "fail": 0, "durations": []},
+                        "B": {"runs": 0, "success": 0, "fail": 0, "durations": []},
+                    }
+                    st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+                    st.success("UX Lab session metrics reset.")
+
+            if st.button("Reset scenario notes", key="ux_reset_scenarios"):
+                st.session_state["ux_lab_scenario_notes"] = {
+                    name: {"a_result": "", "b_result": "", "better": "Undecided", "notes": ""}
+                    for name in _ux_lab_scenarios()
+                }
+                st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+                st.success("Scenario notes reset.")
+
+            _render_ux_lab_scenario_editor()
+
+            if "ux_lab_summary_text" not in st.session_state:
+                st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+
+            with st.expander("Summary for UX_TEST_NOTES.md", expanded=False):
+                st.text_area(
+                    "Copy this summary into UX_TEST_NOTES.md",
+                    value=st.session_state.get("ux_lab_summary_text", ""),
+                    height=220,
+                    key="ux_lab_summary_preview",
+                    help="Use Ctrl/Cmd+C after clicking 'Copy test summary'.",
+                )
+        if ux_lab_enhanced:
+            st.info("UX Lab flow: 1) Pick mode, 2) Upload or reuse image, 3) Generate model and preview/download.")
+
         mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0, key="model_mode_select")
         image_path = st.session_state.get("image_path")
+
+        if ux_lab_enhanced and st.session_state.get("ux_lab_last_success"):
+            if st.button("Apply last successful settings", key="ux_apply_last_success"):
+                last = st.session_state["ux_lab_last_success"]
+                st.session_state["model_mode_select"] = last.get("mode", st.session_state.get("model_mode_select", "Medium_Quality_Mode_STA"))
+                st.session_state["filename_glb_tab2_sta"] = last.get("filename_sta", st.session_state.get("filename_glb_tab2_sta", "model"))
+                st.session_state["filename_glb_tab2_tripo"] = last.get("filename_tripo", st.session_state.get("filename_glb_tab2_tripo", "model"))
+                st.session_state["tab2_sta_texture_resolution"] = last.get("texture_resolution", st.session_state.get("tab2_sta_texture_resolution", "1024"))
+                st.session_state["tab2_sta_foreground_ratio"] = last.get("foreground_ratio", st.session_state.get("tab2_sta_foreground_ratio", 0.85))
+                st.session_state["tab2_sta_remesh"] = last.get("remesh", st.session_state.get("tab2_sta_remesh", "none"))
+                st.session_state["tab2_sta_vertex_count"] = last.get("vertex_count", st.session_state.get("tab2_sta_vertex_count", -1))
+                st.success("Reapplied last successful settings.")
+                st.rerun()
+
+        if ux_lab_enhanced and image_path:
+            st.caption("Image source: using the most recently generated image. You can override it by uploading a new one below.")
 
         uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"], key="model_image_upload")
         if uploaded:
@@ -924,18 +1273,93 @@ installButton.addEventListener('click', async () => {
 
         if not image_path:
             st.warning("Please generate or upload an image first.")
+            if ux_lab_enhanced:
+                st.info("Quick start: create an image in the Image Generation tab, then return here to generate 3D.")
         else:
             st.image(image_path, caption="Input Image", width=300)
 
             if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
-                texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
-                foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
-                remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
-                vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
+                if ux_lab_enhanced:
+                    with st.expander("Basic settings", expanded=True):
+                        texture_resolution = st.selectbox(
+                            "Texture Resolution",
+                            ["512", "1024", "2048"],
+                            index=1,
+                            key="tab2_sta_texture_resolution",
+                        )
+                        foreground_ratio = st.slider(
+                            "Foreground Ratio",
+                            0.1,
+                            1.0,
+                            0.85,
+                            0.05,
+                            key="tab2_sta_foreground_ratio",
+                        )
+                        st.caption("Tip: 1024 texture + foreground around 0.8-0.9 is a good starting point.")
+                    with st.expander("Advanced settings", expanded=False):
+                        remesh = st.selectbox("Remesh", ["none", "quad", "triangle"], key="tab2_sta_remesh")
+                        vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1, key="tab2_sta_vertex_count")
+                else:
+                    texture_resolution = st.selectbox(
+                        "Texture Resolution",
+                        ["512", "1024", "2048"],
+                        index=1,
+                        key="tab2_sta_texture_resolution",
+                    )
+                    foreground_ratio = st.slider(
+                        "Foreground Ratio",
+                        0.1,
+                        1.0,
+                        0.85,
+                        0.05,
+                        key="tab2_sta_foreground_ratio",
+                    )
+                    remesh = st.selectbox("Remesh", ["none", "quad", "triangle"], key="tab2_sta_remesh")
+                    vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1, key="tab2_sta_vertex_count")
+
                 filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_sta")
+                if ux_lab_enhanced:
+                    quality_label, performance_label = _estimate_stability_profile(
+                        texture_resolution,
+                        foreground_ratio,
+                        int(vertex_count),
+                        remesh,
+                    )
+                    st.caption(f"Estimate: quality {quality_label} | performance cost {performance_label}")
+
+                    filename_validation = _validate_export_filename(filename_glb)
+                    if filename_validation["level"] == "success":
+                        st.success(filename_validation["message"])
+                    elif filename_validation["level"] == "warning":
+                        st.warning(filename_validation["message"])
+                    else:
+                        st.info(filename_validation["message"])
+
+                    vertex_validation = _validate_vertex_count(int(vertex_count))
+                    if vertex_validation["level"] == "success":
+                        st.success(vertex_validation["message"])
+                    elif vertex_validation["level"] == "warning":
+                        st.warning(vertex_validation["message"])
+                    else:
+                        st.error(vertex_validation["message"])
 
                 if st.button("Generate 3D Model", key="generate_3d_stability"):
+                    if ux_lab_enhanced and int(vertex_count) <= 0 and int(vertex_count) != -1:
+                        st.error("Cannot generate: set Vertex Count to -1 (auto) or a positive integer.")
+                        st.stop()
+
+                    progress = None
+                    status = None
+                    if ux_lab_enhanced:
+                        status = st.empty()
+                        progress = st.progress(0)
+                        status.caption("Validating inputs...")
+                        progress.progress(15)
                     with st.spinner("Generating 3D model..."):
+                        started_at = time.time()
+                        if ux_lab_enhanced:
+                            status.caption("Sending job to Stability AI...")
+                            progress.progress(45)
                         glb_path = generate_3d_model_stability(
                             image_path,
                             texture_resolution,
@@ -943,8 +1367,22 @@ installButton.addEventListener('click', async () => {
                             remesh,
                             vertex_count,
                         )
+                        duration_seconds = time.time() - started_at
                         if glb_path:
+                            if ux_lab_enhanced:
+                                status.caption("Finalizing model preview...")
+                                progress.progress(80)
                             persist_glb_in_session(glb_path)
+                            if ux_lab_enhanced:
+                                st.session_state["ux_lab_last_success"] = {
+                                    "mode": mode,
+                                    "filename_sta": filename_glb,
+                                    "filename_tripo": st.session_state.get("filename_glb_tab2_tripo", "model"),
+                                    "texture_resolution": texture_resolution,
+                                    "foreground_ratio": float(foreground_ratio),
+                                    "remesh": remesh,
+                                    "vertex_count": int(vertex_count),
+                                }
                             st.success("3D model generated!")
                             safe_name = sanitize_filename(filename_glb) or "model"
                             with open(glb_path, "rb") as f:
@@ -954,13 +1392,64 @@ installButton.addEventListener('click', async () => {
                                     file_name=f"{safe_name}.glb",
                                     mime="model/gltf-binary",
                                 )
+                            if ux_lab_enhanced:
+                                progress.progress(100)
+                                status.caption("Generation complete.")
+                            if ux_lab_enabled:
+                                _record_ux_lab_run(ux_variant_label, success=True, duration_seconds=duration_seconds)
+                                st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+                        elif ux_lab_enhanced:
+                            progress.progress(100)
+                            status.caption("Generation finished with no model returned.")
+                            if ux_lab_enabled:
+                                _record_ux_lab_run(ux_variant_label, success=False, duration_seconds=duration_seconds)
+                                st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+                        elif ux_lab_enabled:
+                            _record_ux_lab_run(ux_variant_label, success=False, duration_seconds=duration_seconds)
+                            st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
             else:
                 filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_tripo")
+                if ux_lab_enhanced:
+                    st.caption("Estimate: quality provider-managed | performance cost network-dependent")
+
+                    filename_validation = _validate_export_filename(filename_glb)
+                    if filename_validation["level"] == "success":
+                        st.success(filename_validation["message"])
+                    elif filename_validation["level"] == "warning":
+                        st.warning(filename_validation["message"])
+                    else:
+                        st.info(filename_validation["message"])
+
                 if st.button("Generate 3D Model", key="generate_3d_tripo"):
+                    progress = None
+                    status = None
+                    if ux_lab_enhanced:
+                        status = st.empty()
+                        progress = st.progress(0)
+                        status.caption("Validating inputs...")
+                        progress.progress(15)
                     with st.spinner("Generating 3D model..."):
+                        started_at = time.time()
+                        if ux_lab_enhanced:
+                            status.caption("Sending job to Tripo3D...")
+                            progress.progress(45)
                         glb_path = generate_3d_model_tripo(image_path)
+                        duration_seconds = time.time() - started_at
                         if glb_path:
+                            if ux_lab_enhanced:
+                                status.caption("Finalizing model preview...")
+                                progress.progress(80)
                             persist_glb_in_session(glb_path)
+                            if ux_lab_enhanced:
+                                st.session_state["ux_lab_last_success"] = {
+                                    "mode": mode,
+                                    "filename_sta": st.session_state.get("filename_glb_tab2_sta", "model"),
+                                    "filename_tripo": filename_glb,
+                                    "texture_resolution": st.session_state.get("tab2_sta_texture_resolution", "1024"),
+                                    "foreground_ratio": float(st.session_state.get("tab2_sta_foreground_ratio", 0.85)),
+                                    "remesh": st.session_state.get("tab2_sta_remesh", "none"),
+                                    "vertex_count": int(st.session_state.get("tab2_sta_vertex_count", -1)),
+                                }
                             st.success("3D model generated!")
                             safe_name = sanitize_filename(filename_glb) or "model"
                             with open(glb_path, "rb") as f:
@@ -970,6 +1459,21 @@ installButton.addEventListener('click', async () => {
                                     file_name=f"{safe_name}.glb",
                                     mime="model/gltf-binary",
                                 )
+                            if ux_lab_enhanced:
+                                progress.progress(100)
+                                status.caption("Generation complete.")
+                            if ux_lab_enabled:
+                                _record_ux_lab_run(ux_variant_label, success=True, duration_seconds=duration_seconds)
+                                st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+                        elif ux_lab_enhanced:
+                            progress.progress(100)
+                            status.caption("Generation finished with no model returned.")
+                            if ux_lab_enabled:
+                                _record_ux_lab_run(ux_variant_label, success=False, duration_seconds=duration_seconds)
+                                st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
+                        elif ux_lab_enabled:
+                            _record_ux_lab_run(ux_variant_label, success=False, duration_seconds=duration_seconds)
+                            st.session_state["ux_lab_summary_text"] = _format_ux_lab_summary()
 
             current_glb_path = get_session_glb_path()
             if current_glb_path and os.path.exists(current_glb_path):
@@ -977,6 +1481,20 @@ installButton.addEventListener('click', async () => {
                 if snapshot_png:
                     st.subheader("Model Image Preview")
                     st.image(snapshot_png, caption="Snapshot of generated GLB", width="stretch")
+                if ux_lab_enhanced:
+                    has_preview = bool(snapshot_png)
+                    has_glb = bool(current_glb_path and os.path.exists(current_glb_path))
+                    st.markdown(
+                        "\n".join(
+                            [
+                                "**Post-Generation Checklist**",
+                                f"- [{'x' if has_glb else ' '}] Model file available",
+                                f"- [{'x' if has_preview else ' '}] Snapshot preview rendered",
+                                f"- [{'x' if has_glb else ' '}] Download button ready",
+                                f"- [{'x' if has_glb else ' '}] Ready for OBJ/STL conversion tabs",
+                            ]
+                        )
+                    )
                 st.subheader("Current 3D Preview")
                 restored_tag = "restored-from-session" if st.session_state.get("glb_restored_from_bytes") else "direct-file"
                 st.caption(f"Debug render source: {current_glb_path} ({restored_tag})")
@@ -1158,10 +1676,11 @@ installButton.addEventListener('click', async () => {
                 st.session_state["chat_input_next"] = ""
                 st.rerun()
 
-        user_input = st.text_input(
+        user_input = st.text_area(
             "Ask the assistant anything about image + 3D concept ideas",
             key="chat_input",
             placeholder="Example: Suggest a stylized creature concept with clean silhouette for 3D conversion.",
+            height=96,
         )
         if st.button("Send", key="send_chat"):
             if not user_input.strip():

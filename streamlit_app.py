@@ -1440,7 +1440,6 @@ installButton.addEventListener('click', async () => {
 - **3D Print Art** — Cults3D, Tinkercad
 - **Ecommerce** — Shopify, TikTok Shop, Printful, Etsy
 - **Social Editing** — Canva, TikTok
-- **Support** — Lark
 - **Blog** — Medium
 - **AI** — ChatGPT, Claude
 """)
@@ -1457,7 +1456,6 @@ installButton.addEventListener('click', async () => {
             ("Shopify", "https://www.shopify.com"),
             ("TikTok Shop", "https://seller-uk.tiktok.com/homepage?shop_region=GB"),
             ("TikTok", "https://www.tiktok.com/"),
-            ("Lark", "https://www.larksuite.com/en_sg/"),
             ("Printful", "https://www.printful.com"),
             ("Etsy", "https://www.etsy.com"),
             ("Tinkercad", "https://www.tinkercad.com"),

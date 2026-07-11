@@ -38,6 +38,13 @@ Start the app:
 streamlit run streamlit_app.py
 ```
 
+## Troubleshooting OpenAI Image Generation
+
+- If you see an OpenAI error like `billing_hard_limit_reached`, the active key/project has no remaining billing capacity.
+- Rotate to a funded key and update `OPENAI_API_KEY` in your local `.env` (or Streamlit secrets).
+- The app re-reads `.env` during key lookup, so key rotation is picked up on the next request.
+- As a fallback, switch image mode to `Slow_Mode_SDXL`.
+
 ## Streamlit Cloud
 
 Use `streamlit_app.py` as the app entry point and add API keys in Streamlit secrets or environment variables. The repo is structured so it can be connected directly to Streamlit Cloud.

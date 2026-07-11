@@ -21,6 +21,8 @@ load_dotenv()
 
 def get_api_key(key_name):
     """Get API key from environment or Streamlit secrets."""
+    # Re-read local .env so rotated keys are picked up without a full app restart.
+    load_dotenv(override=True)
     value = os.environ.get(key_name)
     if value:
         return value
@@ -1496,6 +1498,27 @@ def get_openai_client():
     return OpenAI(api_key=api_key)
 
 
+def _friendly_openai_image_error(exc):
+    """Map known OpenAI image API failures to user-friendly guidance."""
+    text = str(exc)
+    lowered = text.lower()
+
+    if "billing_hard_limit_reached" in lowered or "billing hard limit has been reached" in lowered:
+        return (
+            "OpenAI billing limit reached for the active key/project. "
+            "Use a funded key, then update OPENAI_API_KEY in your .env or Streamlit secrets and try again. "
+            "You can also switch to Slow_Mode_SDXL as a fallback."
+        )
+
+    if "invalid_api_key" in lowered or "incorrect api key" in lowered:
+        return (
+            "OpenAI rejected the API key. Update OPENAI_API_KEY in your .env or Streamlit secrets, "
+            "then retry image generation."
+        )
+
+    return f"Image generation failed: {text}"
+
+
 def generate_image_openai(prompt: str) -> str:
     try:
         if not get_api_key("OPENAI_API_KEY"):
@@ -1526,7 +1549,7 @@ def generate_image_openai(prompt: str) -> str:
 
         return tmp.name
     except Exception as e:
-        st.error(f"Image generation failed: {e}")
+        st.error(_friendly_openai_image_error(e))
         traceback.print_exc()
         return ""
 

@@ -115,7 +115,7 @@ def _project_point_iso(point):
 def build_static_snapshot(glb_path, note=""):
     """Render a static PNG snapshot from mesh vertices when triangulation fails."""
     width, height = 960, 640
-    image = Image.new("RGB", (width, height), "#eef2ff")
+    image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
 
     loaded = trimesh.load(glb_path, force="scene")
@@ -174,7 +174,7 @@ def build_static_snapshot(glb_path, note=""):
 def build_placeholder_snapshot(note=""):
     """Return a simple placeholder PNG when model snapshot generation fails."""
     width, height = 960, 640
-    image = Image.new("RGB", (width, height), "#f8fafc")
+    image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
     draw.rectangle((24, 24, width - 24, height - 24), outline="#94a3b8", width=2)
     draw.text((40, 44), "Model image preview unavailable", fill="#0f172a")
@@ -218,15 +218,15 @@ def get_default_viewer_settings():
     """Return default interactive viewer settings."""
     return {
         "max_faces": 60000,
-        "normalize": True,
+        "normalize": False,
         "wireframe": False,
         "wireframe_limit": 12000,
-        "ambient": 0.45,
-        "diffuse": 0.85,
-        "specular": 0.28,
-        "roughness": 0.62,
+        "ambient": 0.44,
+        "diffuse": 0.48,
+        "specular": 0.04,
+        "roughness": 0.84,
         "flatshading": False,
-        "bg_color": "#f8fafc",
+        "bg_color": "#ffffff",
         "camera_preset": "Isometric",
         "projection": "perspective",
         "show_axes": False,
@@ -236,7 +236,7 @@ def get_default_viewer_settings():
 def _camera_eye_from_preset(name):
     """Map a friendly camera preset name to a Plotly camera eye vector."""
     presets = {
-        "Isometric": {"x": 1.8, "y": 1.8, "z": 1.2},
+        "Isometric": {"x": 1.65, "y": 1.65, "z": 1.0},
         "Front": {"x": 0.0, "y": 2.5, "z": 0.2},
         "Top": {"x": 0.01, "y": 0.01, "z": 2.8},
         "Left": {"x": -2.5, "y": 0.1, "z": 0.2},
@@ -264,6 +264,32 @@ def _normalize_vertices(vertices):
     if extent <= 1e-9:
         extent = 1.0
     return (vertices - center) / extent
+
+
+def _to_plotly_rgba_colors(colors):
+    """Convert trimesh color arrays into Plotly-friendly rgba strings."""
+    if colors is None:
+        return None
+
+    array = np.asarray(colors)
+    if array.ndim != 2 or array.shape[1] < 3 or len(array) == 0:
+        return None
+
+    rgb = array[:, :3].astype(float)
+    if np.issubdtype(array.dtype, np.floating) and float(np.nanmax(rgb)) <= 1.0:
+        rgb = np.clip(rgb * 255.0, 0, 255)
+
+    if array.shape[1] >= 4:
+        alpha = array[:, 3].astype(float)
+        if np.issubdtype(array.dtype, np.floating) and float(np.nanmax(alpha)) <= 1.0:
+            alpha = np.clip(alpha * 255.0, 0, 255)
+    else:
+        alpha = np.full((len(array),), 255.0)
+
+    return [
+        f"rgba({int(r)},{int(g)},{int(b)},{float(a) / 255.0:.3f})"
+        for (r, g, b), a in zip(rgb, alpha)
+    ]
 
 
 def _build_wireframe_trace(vertices, faces, edge_limit):
@@ -340,36 +366,48 @@ def build_plotly_figure(glb_path, settings=None):
         i = compact_faces[:, 0]
         j = compact_faces[:, 1]
         k = compact_faces[:, 2]
-        color = "#ff6b6b"
+        color = "#b8b8b8"
+        vertex_colors = None
         visual = getattr(mesh, "visual", None)
         material = getattr(visual, "material", None) if visual is not None else None
+        raw_vertex_colors = getattr(visual, "vertex_colors", None) if visual is not None else None
+        if raw_vertex_colors is not None:
+            try:
+                vertex_array = np.asarray(raw_vertex_colors)
+                if vertex_array.ndim == 2 and len(vertex_array) == len(vertices):
+                    vertex_colors = _to_plotly_rgba_colors(vertex_array[used])
+            except Exception:
+                vertex_colors = None
         base_color = getattr(material, "baseColorFactor", None)
         if base_color and len(base_color) >= 3:
             rgb = tuple(int(channel) for channel in base_color[:3])
             color = f"rgb({rgb[0]},{rgb[1]},{rgb[2]})"
 
-        figure.add_trace(
-            go.Mesh3d(
-                x=compact_vertices[:, 0],
-                y=compact_vertices[:, 1],
-                z=compact_vertices[:, 2],
-                i=i,
-                j=j,
-                k=k,
-                color=color,
-                flatshading=bool(settings["flatshading"]),
-                lighting={
-                    "ambient": float(settings["ambient"]),
-                    "diffuse": float(settings["diffuse"]),
-                    "specular": float(settings["specular"]),
-                    "roughness": float(settings["roughness"]),
-                },
-                lightposition={"x": 120, "y": 160, "z": 200},
-                hoverinfo="skip",
-                name=os.path.basename(glb_path),
-                showscale=False,
-            )
-        )
+        mesh_trace_kwargs = {
+            "x": compact_vertices[:, 0],
+            "y": compact_vertices[:, 1],
+            "z": compact_vertices[:, 2],
+            "i": i,
+            "j": j,
+            "k": k,
+            "flatshading": bool(settings["flatshading"]),
+            "lighting": {
+                "ambient": float(settings["ambient"]),
+                "diffuse": float(settings["diffuse"]),
+                "specular": float(settings["specular"]),
+                "roughness": float(settings["roughness"]),
+            },
+            "lightposition": {"x": 80, "y": 80, "z": 130},
+            "hoverinfo": "skip",
+            "name": os.path.basename(glb_path),
+            "showscale": False,
+        }
+        if vertex_colors:
+            mesh_trace_kwargs["vertexcolor"] = vertex_colors
+        else:
+            mesh_trace_kwargs["color"] = color
+
+        figure.add_trace(go.Mesh3d(**mesh_trace_kwargs))
 
         if settings.get("wireframe"):
             wire = _build_wireframe_trace(
@@ -406,157 +444,13 @@ def build_plotly_figure(glb_path, settings=None):
     return figure
 
 
-def build_physical_viewer_html(glb_path, exposure=1.0, shadow_intensity=1.0):
-    """Build an embeddable <model-viewer> HTML block for physical PBR rendering."""
-    with open(glb_path, "rb") as file_obj:
-        encoded_glb = base64.b64encode(file_obj.read()).decode("ascii")
-
-    return f"""
-<style>
-    .viewer-shell {{
-        width: 100%;
-        height: 100%;
-        min-height: 560px;
-        border-radius: 14px;
-        border: 1px solid #ef4444;
-        background:
-            radial-gradient(circle at 20% 10%, #fecaca 0%, transparent 45%),
-            radial-gradient(circle at 85% 80%, #ef4444 0%, transparent 42%),
-            linear-gradient(135deg, #7f1d1d 0%, #450a0a 100%);
-        overflow: hidden;
-        position: relative;
-    }}
-    model-viewer {{
-        width: 100%;
-        height: 100%;
-        --poster-color: transparent;
-    }}
-    .viewer-tag {{
-        position: absolute;
-        top: 10px;
-        left: 10px;
-        color: #fee2e2;
-        background: rgba(69, 10, 10, 0.72);
-        border: 1px solid #f87171;
-        border-radius: 999px;
-        padding: 4px 10px;
-        font: 600 12px/1.2 system-ui, -apple-system, sans-serif;
-        letter-spacing: 0.02em;
-        pointer-events: none;
-    }}
-    .viewer-status {{
-        position: absolute;
-        right: 10px;
-        top: 10px;
-        color: #fee2e2;
-        background: rgba(69, 10, 10, 0.72);
-        border: 1px solid #f87171;
-        border-radius: 999px;
-        padding: 4px 10px;
-        font: 600 12px/1.2 system-ui, -apple-system, sans-serif;
-        letter-spacing: 0.02em;
-        max-width: 75%;
-        text-overflow: ellipsis;
-        overflow: hidden;
-        white-space: nowrap;
-    }}
-</style>
-<div class="viewer-shell">
-    <div class="viewer-tag">Physical PBR Viewer</div>
-    <div class="viewer-status" id="viewer-status">Loading viewer...</div>
-    <model-viewer
-        id="pbr-model"
-        camera-controls
-        touch-action="pan-y"
-        auto-rotate
-        rotation-per-second="22deg"
-        exposure="{float(exposure):.2f}"
-        shadow-intensity="{float(shadow_intensity):.2f}"
-        environment-image="neutral"
-        tone-mapping="commerce"
-        interaction-prompt="auto"
-        interaction-prompt-style="wiggle"
-        camera-orbit="45deg 70deg auto"
-        min-camera-orbit="auto 15deg 80%"
-        max-camera-orbit="auto 150deg 250%"
-    ></model-viewer>
-</div>
-<script type="module">
-    const base64Data = "{encoded_glb}";
-    const statusEl = document.getElementById("viewer-status");
-    const modelEl = document.getElementById("pbr-model");
-
-    const setStatus = (message) => {{
-        if (statusEl) statusEl.textContent = message;
-    }};
-
-    const ensureModelViewer = async () => {{
-        if (customElements.get("model-viewer")) return true;
-        const moduleUrls = [
-            "https://cdn.jsdelivr.net/npm/@google/model-viewer/dist/model-viewer.min.js",
-            "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js",
-        ];
-        for (const moduleUrl of moduleUrls) {{
-            try {{
-                await import(moduleUrl);
-                if (customElements.get("model-viewer")) return true;
-            }} catch (err) {{
-                // Try the next CDN.
-            }}
-        }}
-        return false;
-    }};
-
-    const base64ToBlobUrl = (payload) => {{
-        const binary = atob(payload);
-        const bytes = new Uint8Array(binary.length);
-        for (let idx = 0; idx < binary.length; idx += 1) {{
-            bytes[idx] = binary.charCodeAt(idx);
-        }}
-        const blob = new Blob([bytes], {{ type: "model/gltf-binary" }});
-        return URL.createObjectURL(blob);
-    }};
-
-    try {{
-        setStatus("Loading model-viewer library...");
-        const libLoaded = await ensureModelViewer();
-        if (!libLoaded) {{
-            setStatus("Failed to load model-viewer library");
-            throw new Error("model-viewer library unavailable");
-        }}
-
-        setStatus("Preparing GLB...");
-        const objectUrl = base64ToBlobUrl(base64Data);
-
-        modelEl.addEventListener("load", () => setStatus("Model loaded"), {{ once: true }});
-        modelEl.addEventListener("error", () => setStatus("Model failed to load"), {{ once: true }});
-        modelEl.src = objectUrl;
-    }} catch (error) {{
-        setStatus("Viewer error");
-        console.error("PBR viewer failed:", error);
-    }}
-</script>
-"""
-
-
 def display_3d_model(glb_path, chart_key=None):
     """Display a 3D GLB model using Plotly as a browser-safe fallback."""
     st.caption(f"Viewing: {os.path.basename(glb_path)}")
 
     viewer_key = chart_key or "viewer"
 
-    mode_key = f"{viewer_key}_mode"
-    mode_options = ["Interactive (Plotly)"]
-    selected_mode = st.radio(
-        "Viewer mode",
-        mode_options,
-        index=0,
-        horizontal=True,
-        key=mode_key,
-    )
-
-    if selected_mode == "Interactive (Plotly)":
-        show_preview_mode_badge("Interactive")
+    show_preview_mode_badge("Interactive")
 
     defaults = get_default_viewer_settings()
     settings = {

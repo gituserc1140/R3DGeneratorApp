@@ -739,7 +739,7 @@ def run_app():
     setup_pwa()
     render_api_key_inputs()
 
-    st.title("RKstudio3Dps → 🖼️ → 🧊")
+    st.title("StudioRK3dps → 🖼️ → 🧊")
 
     install_button_html = """
 <div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">

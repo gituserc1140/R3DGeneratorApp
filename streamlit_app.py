@@ -1334,8 +1334,26 @@ def get_openai_image_model_name():
 
 def _openai_image_model_candidates():
     configured = get_openai_image_model_name()
-    defaults = ["dall-e-3", "dall-e-2", "gpt-image-1"]
-    candidates = [configured, *defaults] if configured else defaults
+    defaults = ["gpt-image-1", "dall-e-3", "dall-e-2"]
+
+    discovered = []
+    try:
+        client = get_openai_client()
+        for model in getattr(client.models, "list", lambda: [])().data:
+            model_name = getattr(model, "id", "") or ""
+            if not model_name:
+                continue
+            lowered = model_name.lower()
+            if lowered.startswith("gpt-image") or lowered.startswith("dall-e"):
+                discovered.append(model_name)
+    except Exception:
+        discovered = []
+
+    candidates = []
+    if configured:
+        candidates.append(configured)
+    candidates.extend(discovered)
+    candidates.extend(defaults)
 
     seen = set()
     ordered = []

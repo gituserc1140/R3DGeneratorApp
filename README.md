@@ -4,6 +4,12 @@ Welcome to StudioRK3dps Community App & API Workflow Adaptation Streamlit app fo
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://studiork3dps-community-app-7ujeaa3i9kknheoguwqw8d.streamlit.app/)
 
+## Check out my socials!
+
+[![TikTok](https://img.shields.io/badge/TikTok-@studiork3dps-000000?style=for-the-badge&logo=tiktok&logoColor=white)](https://www.tiktok.com/@studiork3dps)
+[![Instagram](https://img.shields.io/badge/Instagram-@rk3dps-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/rk3dps/)
+
+## Attributions to API tech providers and frameworks!
 
 ## Features
 
@@ -52,9 +58,4 @@ streamlit run streamlit_app.py
 
 Use `streamlit_app.py` as the app entry point and add API keys in Streamlit secrets or environment variables. The repo is structured so it can be connected directly to Streamlit Cloud.
 
-## Attributions to API tech providers and frameworks!
 
-## Check out my socials!
-
-[![TikTok](https://img.shields.io/badge/TikTok-@studiork3dps-000000?style=for-the-badge&logo=tiktok&logoColor=white)](https://www.tiktok.com/@studiork3dps)
-[![Instagram](https://img.shields.io/badge/Instagram-@rk3dps-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/rk3dps/)

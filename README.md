@@ -1,6 +1,6 @@
-**StudioRK3dps-Community-App-API-Workflow-Adaptation**
+## StudioRK3dps-Community-App-API-Workflow-Adaptation
 
-Streamlit app for turning text prompts into images and then converting those images into 3D models.
+Welcome to StudioRK3dps Community App & API Workflow Adaptation Streamlit app for turning text prompts into images and then converting those images into 3D models.
 
 ## Features
 
@@ -10,6 +10,7 @@ Streamlit app for turning text prompts into images and then converting those ima
 - AI chat assistant powered by Cohere for idea generation and workflow guidance
 - Cohere-powered 3D image prompt ideas
 - PWA metadata and service worker support
+- App allows Api keys to be entered on frontend side bar on the left after clicking left arrow for session based usage
 
 ## Run locally
 
@@ -20,7 +21,6 @@ pip install -r requirements.txt
 ```
 
 **Important:** Never commit API keys to version control. Set environment variables in a local `.env` file (ensure `.env` is in `.gitignore`) Or Streamlit Cloud secrets. **Do not commit the `.env` file.**
-**Important:** App allows Api keys to be entered on frontend side bar on the left after clicking left arrow for session based usage
 
 Example `.env` file:
 

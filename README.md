@@ -42,7 +42,7 @@ streamlit run streamlit_app.py
 ## Troubleshooting Image Generation and 3D Generation
 
 - If you see an OpenAI error like `billing_hard_limit_reached`, the active key/project has no remaining billing capacity.
-- If image generation reports that model `gpt-image-1` does not exist, set `OPENAI_IMAGE_MODEL=dall-e-3` in your `.env` or Streamlit secrets.
+- If image generation reports that model `gpt-image-1` does not exist, set `OPENAI_IMAGE_MODEL=dall-e-3` (or `dall-e-2`) in your `.env` or Streamlit secrets.
 - Rotate to a personal paid funded key and update `OPENAI_API_KEY` in your local `.env` (or Streamlit secrets or frontend).
 - The app re-reads `.env` during key lookup, so key rotation is picked up on the next request.
 - Stability Api key is personal paid usage 

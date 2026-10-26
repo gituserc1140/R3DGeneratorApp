@@ -1293,7 +1293,7 @@ def _friendly_openai_image_error(exc):
     if "does not exist" in lowered and "model" in lowered:
         return (
             "The selected OpenAI image model is unavailable for this key/project. "
-            "Set OPENAI_IMAGE_MODEL to a supported image model (for example, dall-e-3) and retry."
+            "Set OPENAI_IMAGE_MODEL to a supported image model (for example, dall-e-3 or dall-e-2) and retry."
         )
 
     return f"Image generation failed: {text}"
@@ -1306,8 +1306,16 @@ def _openai_image_model_candidates():
             configured = (st.secrets.get("OPENAI_IMAGE_MODEL") or "").strip()
         except Exception:
             configured = ""
-    candidates = [configured] if configured else ["gpt-image-1", "dall-e-3"]
-    return [model for model in candidates if model]
+    defaults = ["dall-e-3", "dall-e-2", "gpt-image-1"]
+    candidates = [configured, *defaults] if configured else defaults
+
+    seen = set()
+    ordered = []
+    for model in candidates:
+        if model and model not in seen:
+            seen.add(model)
+            ordered.append(model)
+    return ordered
 
 
 def _is_unknown_openai_image_model_error(exc):

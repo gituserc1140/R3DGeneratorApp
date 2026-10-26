@@ -1295,8 +1295,28 @@ def _friendly_openai_image_error(exc):
             "The selected OpenAI image model is unavailable for this key/project. "
             "Set OPENAI_IMAGE_MODEL to a supported image model (for example, dall-e-3 or dall-e-2) and retry."
         )
+    if "none of the candidate openai image models are available" in lowered:
+        return (
+            "None of the candidate OpenAI image models are available for this key/project. "
+            "Set OPENAI_IMAGE_MODEL to a supported model for your account and retry."
+        )
 
     return f"Image generation failed: {text}"
+
+
+def _is_expected_openai_image_error(exc):
+    lowered = str(exc).lower()
+    expected_markers = (
+        "billing_hard_limit_reached",
+        "billing hard limit has been reached",
+        "invalid_api_key",
+        "incorrect api key",
+        "none of the candidate openai image models are available",
+        "openai_api_key not found",
+    )
+    return all(marker in lowered for marker in ("does not exist", "model")) or any(
+        marker in lowered for marker in expected_markers
+    )
 
 
 def _openai_image_model_candidates():
@@ -1331,7 +1351,10 @@ def generate_image_openai(prompt: str) -> str:
         client = get_openai_client()
         response = None
         image_model_error = None
+        attempted_models = []
+        unknown_model_names = []
         for model_name in _openai_image_model_candidates():
+            attempted_models.append(model_name)
             try:
                 response = client.images.generate(
                     model=model_name,
@@ -1343,11 +1366,20 @@ def generate_image_openai(prompt: str) -> str:
             except Exception as model_exc:
                 if _is_unknown_openai_image_model_error(model_exc):
                     image_model_error = model_exc
+                    unknown_model_names.append(model_name)
                     continue
                 raise
 
-        if response is None and image_model_error:
-            raise image_model_error
+        if response is None:
+            if image_model_error and attempted_models and len(unknown_model_names) == len(attempted_models):
+                tried = ", ".join(unknown_model_names)
+                raise ValueError(
+                    "None of the candidate OpenAI image models are available for this key/project. "
+                    f"Tried: {tried}. Set OPENAI_IMAGE_MODEL to a supported model and retry."
+                )
+            if image_model_error:
+                raise image_model_error
+            raise RuntimeError("OpenAI image generation failed without a response.")
 
         image_item = response.data[0]
         image_base64 = getattr(image_item, "b64_json", None)
@@ -1367,7 +1399,8 @@ def generate_image_openai(prompt: str) -> str:
         return tmp.name
     except Exception as e:
         st.error(_friendly_openai_image_error(e))
-        traceback.print_exc()
+        if not _is_expected_openai_image_error(e):
+            traceback.print_exc()
         return ""
 
 

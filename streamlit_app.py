@@ -1311,8 +1311,6 @@ def _is_expected_openai_image_error(exc):
         "billing hard limit has been reached",
         "invalid_api_key",
         "incorrect api key",
-        "does not exist",
-        "model",
         "none of the candidate openai image models are available",
         "openai_api_key not found",
     )

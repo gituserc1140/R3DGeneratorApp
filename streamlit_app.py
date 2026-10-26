@@ -44,7 +44,9 @@ def render_api_key_inputs():
         st.header("🔑 Your API keys")
         st.caption("Optional. Keys are kept only in this browser session and override server-configured keys.")
         for state_key, label, _names in USER_KEY_FIELDS:
-            st.text_input(label, type="password", key=state_key)
+            value = st.text_input(label, type="password", key=state_key)
+            if (value or "").strip():
+                st.caption(":green[✅ Key accepted for this session]")
 
 
 def get_api_key(key_name):

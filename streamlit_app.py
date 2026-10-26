@@ -704,7 +704,7 @@ def run_app():
 
     setup_pwa()
 
-    st.title("RKstudio3Dps & Ecommerce App → 🖼️ → 🧊")
+    st.title("RKstudio3Dps → 🖼️ → 🧊")
 
     install_button_html = """
 <div style="position: fixed; top: 10px; right: 10px; z-index: 1000;">
@@ -746,8 +746,7 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab_details, tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl, tab_blog, tab_links = st.tabs([
-        "Details",
+    tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl, tab_blog = st.tabs([
         "3D Model Prompt Ideas (Cohere)",
         "AI Chat Assistant",
         "Image Generation",
@@ -756,7 +755,6 @@ installButton.addEventListener('click', async () => {
         "Convert to OBJ",
         "Convert to STL",
         "Blog Writer (Cohere)",
-        "Links",
     ])
 
     def sanitize_filename(name):
@@ -1329,59 +1327,6 @@ installButton.addEventListener('click', async () => {
                 mime="text/markdown",
                 key="download_prompt_examples_markdown",
             )
-
-    with tab_details:
-        st.subheader("Details")
-        st.markdown("""
-- **3D Print Art** — Cults3D, Tinkercad
-- **Ecommerce** — Shopify, TikTok Shop, Printful, Etsy
-- **Social Editing** — Canva, TikTok
-- **Blog** — Medium
-- **AI** — ChatGPT, Claude
-""")
-
-    with tab_links:
-        st.subheader("Links")
-        st.caption("Quick links to tools for writing, ecommerce, and 3D creation.")
-
-        links = [
-            ("Canva", "https://www.canva.com"),
-            ("Medium", "https://medium.com"),
-            ("ChatGPT", "https://chatgpt.com"),
-            ("Claude", "https://claude.ai"),
-            ("Shopify", "https://www.shopify.com"),
-            ("TikTok Shop", "https://seller-uk.tiktok.com/homepage?shop_region=GB"),
-            ("TikTok", "https://www.tiktok.com/"),
-            ("Printful", "https://www.printful.com"),
-            ("Etsy", "https://www.etsy.com"),
-            ("Tinkercad", "https://www.tinkercad.com"),
-            ("Cults3D", "https://cults3d.com"),
-        ]
-
-        cols = st.columns(3)
-        for idx, (label, url) in enumerate(links):
-            with cols[idx % 3]:
-                if hasattr(st, "link_button"):
-                    st.link_button(label, url, use_container_width=True)
-                else:
-                    st.markdown(f"[{label}]({url})")
-
-        st.markdown("### API Links")
-        st.caption("Direct access to API platforms and docs.")
-        api_links = [
-            ("Stability API", "https://platform.stability.ai"),
-            ("OpenAI API", "https://platform.openai.com"),
-            ("Cohere API", "https://docs.cohere.com"),
-        ]
-
-        api_cols = st.columns(3)
-        for idx, (label, url) in enumerate(api_links):
-            with api_cols[idx % 3]:
-                if hasattr(st, "link_button"):
-                    st.link_button(label, url, use_container_width=True)
-                else:
-                    st.markdown(f"[{label}]({url})")
-
 
 def get_openai_client():
     from openai import OpenAI

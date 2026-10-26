@@ -19,8 +19,42 @@ from PIL import Image, ImageDraw
 load_dotenv()
 
 
+USER_KEY_FIELDS = [
+    ("user_openai_key", "OpenAI API key", ["OPENAI_API_KEY"]),
+    ("user_cohere_key", "Cohere API key", ["COHERE_API_KEY", "COHERE_KEY", "RKStudioCohere", "RKSTUDIO_COHERE_API_KEY"]),
+    ("user_stability_key", "Stability AI API key", ["STABILITY_KEY", "STABILITY_API_KEY"]),
+    ("user_hf_key", "Hugging Face token", ["HF_TOKEN", "HUGGINGFACE_API_KEY", "RKStudioHF1"]),
+    ("user_tripo_key", "Tripo3D API key", ["TRIPO3D_API_KEY", "RKStudioTripo"]),
+]
+
+
+def get_user_api_key(key_name):
+    """Return a key the end user entered in the sidebar, if any."""
+    try:
+        for state_key, _label, names in USER_KEY_FIELDS:
+            if key_name in names:
+                value = (st.session_state.get(state_key) or "").strip()
+                if value:
+                    return value
+    except Exception:
+        pass
+    return None
+
+
+def render_api_key_inputs():
+    """Sidebar inputs so end users can supply their own API keys (session only)."""
+    with st.sidebar:
+        st.header("🔑 Your API keys")
+        st.caption("Optional. Keys are kept only in this browser session and override server-configured keys.")
+        for state_key, label, _names in USER_KEY_FIELDS:
+            st.text_input(label, type="password", key=state_key)
+
+
 def get_api_key(key_name):
-    """Get API key from environment or Streamlit secrets."""
+    """Get API key from the user's session, environment, or Streamlit secrets."""
+    user_value = get_user_api_key(key_name)
+    if user_value:
+        return user_value
     # Re-read local .env so rotated keys are picked up without a full app restart.
     load_dotenv(override=True)
     value = os.environ.get(key_name)
@@ -699,10 +733,11 @@ def run_app():
         page_title="Image → 3D Generator",
         layout="wide",
         page_icon="🧊",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
 
     setup_pwa()
+    render_api_key_inputs()
 
     st.title("RKstudio3Dps → 🖼️ → 🧊")
 
@@ -1033,7 +1068,7 @@ installButton.addEventListener('click', async () => {
             if not user_input.strip():
                 st.info("Type a prompt first.")
             elif not cohere_api_key:
-                st.error("Set a Cohere API key in .env (COHERE_API_KEY is recommended).")
+                st.error("Enter a Cohere API key in the sidebar (or set COHERE_API_KEY).")
             else:
                 try:
                     history = st.session_state["chat_history"]
@@ -1170,7 +1205,7 @@ installButton.addEventListener('click', async () => {
             if not st.session_state["prompt_topic"].strip():
                 st.info("Add a topic first.")
             elif not cohere_api_key:
-                st.error("Set a Cohere API key in .env (COHERE_API_KEY is recommended).")
+                st.error("Enter a Cohere API key in the sidebar (or set COHERE_API_KEY).")
             else:
                 try:
                     chosen_preset = st.session_state.get("prompt_style_preset", "Simple & Cartoony")
@@ -1298,12 +1333,12 @@ def generate_image_openai(prompt: str) -> str:
 def generate_image_sdxl(prompt: str) -> str:
     try:
         hf_token = (
-            os.environ.get("HF_TOKEN")
-            or os.environ.get("HUGGINGFACE_API_KEY")
-            or os.environ.get("RKStudioHF1")
+            get_api_key("HF_TOKEN")
+            or get_api_key("HUGGINGFACE_API_KEY")
+            or get_api_key("RKStudioHF1")
         )
         if not hf_token:
-            raise ValueError("Set HF_TOKEN, HUGGINGFACE_API_KEY, or RKStudioHF1 in your .env for SDXL mode")
+            raise ValueError("Set HF_TOKEN, HUGGINGFACE_API_KEY, or RKStudioHF1 in your .env, or enter a Hugging Face token in the sidebar")
 
         api_url = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {
@@ -1447,9 +1482,9 @@ def poll_tripo3d_task(task_id: str, api_key: str, timeout_seconds: int = 300, in
 
 def generate_3d_model_tripo(image_path):
     try:
-        api_key = os.environ.get("TRIPO3D_API_KEY") or os.environ.get("RKStudioTripo")
+        api_key = get_api_key("TRIPO3D_API_KEY") or get_api_key("RKStudioTripo")
         if not api_key:
-            raise ValueError("Set TRIPO3D_API_KEY or RKStudioTripo in your .env")
+            raise ValueError("Enter a Tripo3D API key in the sidebar (or set TRIPO3D_API_KEY)")
 
         file_token = upload_image_to_tripo3d(image_path, api_key)
         task_id = create_tripo3d_task(file_token, image_path, api_key)

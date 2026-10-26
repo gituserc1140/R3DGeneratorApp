@@ -781,7 +781,8 @@ installButton.addEventListener('click', async () => {
 
     st.markdown(install_button_html, unsafe_allow_html=True)
 
-    tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl = st.tabs([
+    tab_details, tab_prompt, tab_chat, tab1, tab2, tab3, tab4_obj, tab4_stl = st.tabs([
+        "Details",
         "3D Image Prompt Ideas",
         "AI Chat Assistant",
         "Image Generation",
@@ -795,6 +796,24 @@ installButton.addEventListener('click', async () => {
         import re
 
         return re.sub(r"[^\w\-]+", "_", (name or "").strip())
+
+    with tab_details:
+        st.header("Welcome to StudioRK3dps Community App & API Workflow Adaptation")
+        st.markdown(
+            """
+APIs can be inserted in the sidebar on the left — click the arrow to open it.
+
+- **AI Chat Assistant** can give you ideas.
+- **Image Generation** can generate an image.
+- **3D Model Generation** can generate 3D models.
+- **3D File Viewer** is for viewing models.
+- **Convert to OBJ** can convert a model's format to OBJ.
+- **Convert to STL** can convert a model's format to STL.
+
+---
+*Attributions to API tech providers and frameworks.*
+"""
+        )
 
     with tab1:
         st.caption("Remember to check API usage!")

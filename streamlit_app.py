@@ -1319,13 +1319,21 @@ def _is_expected_openai_image_error(exc):
     )
 
 
-def _openai_image_model_candidates():
+def get_openai_image_model_name():
+    """Return the configured OpenAI image model from the current env or secrets."""
+    load_dotenv(override=True)
     configured = (os.environ.get("OPENAI_IMAGE_MODEL") or "").strip()
-    if not configured:
-        try:
-            configured = (st.secrets.get("OPENAI_IMAGE_MODEL") or "").strip()
-        except Exception:
-            configured = ""
+    if configured:
+        return configured
+    try:
+        configured = (st.secrets.get("OPENAI_IMAGE_MODEL") or "").strip()
+    except Exception:
+        configured = ""
+    return configured
+
+
+def _openai_image_model_candidates():
+    configured = get_openai_image_model_name()
     defaults = ["dall-e-3", "dall-e-2", "gpt-image-1"]
     candidates = [configured, *defaults] if configured else defaults
 

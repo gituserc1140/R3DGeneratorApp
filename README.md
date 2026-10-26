@@ -2,6 +2,8 @@
 
 Welcome to StudioRK3dps Community App & API Workflow Adaptation Streamlit app for turning text prompts into images and then converting those images into 3D models.
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://studiork3dps-community-app-7ujeaa3i9kknheoguwqw8d.streamlit.app/)
+
 ## Features
 
 - Image generation with OpenAI or SDXL via Hugging Face

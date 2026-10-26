@@ -1290,7 +1290,29 @@ def _friendly_openai_image_error(exc):
             "then retry image generation."
         )
 
+    if "does not exist" in lowered and "model" in lowered:
+        return (
+            "The selected OpenAI image model is unavailable for this key/project. "
+            "Set OPENAI_IMAGE_MODEL to a supported image model (for example, dall-e-3) and retry."
+        )
+
     return f"Image generation failed: {text}"
+
+
+def _openai_image_model_candidates():
+    configured = (os.environ.get("OPENAI_IMAGE_MODEL") or "").strip()
+    if not configured:
+        try:
+            configured = (st.secrets.get("OPENAI_IMAGE_MODEL") or "").strip()
+        except Exception:
+            configured = ""
+    candidates = [configured] if configured else ["gpt-image-1", "dall-e-3"]
+    return [model for model in candidates if model]
+
+
+def _is_unknown_openai_image_model_error(exc):
+    lowered = str(exc).lower()
+    return "does not exist" in lowered and "model" in lowered
 
 
 def generate_image_openai(prompt: str) -> str:
@@ -1299,12 +1321,25 @@ def generate_image_openai(prompt: str) -> str:
             raise ValueError("OPENAI_API_KEY not found in environment or secrets")
 
         client = get_openai_client()
-        response = client.images.generate(
-            model="gpt-image-1",
-            prompt=prompt,
-            n=1,
-            size="1024x1024",
-        )
+        response = None
+        image_model_error = None
+        for model_name in _openai_image_model_candidates():
+            try:
+                response = client.images.generate(
+                    model=model_name,
+                    prompt=prompt,
+                    n=1,
+                    size="1024x1024",
+                )
+                break
+            except Exception as model_exc:
+                if _is_unknown_openai_image_model_error(model_exc):
+                    image_model_error = model_exc
+                    continue
+                raise
+
+        if response is None and image_model_error:
+            raise image_model_error
 
         image_item = response.data[0]
         image_base64 = getattr(image_item, "b64_json", None)

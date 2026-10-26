@@ -48,7 +48,7 @@ streamlit run streamlit_app.py
 - The app re-reads `.env` during key lookup, so key rotation is picked up on the next request.
 - As a fall-back, switch image mode to `Slow_Mode_SDXL` corresponds with huggingface Tokens.
 - Triposr allows for free trial usage for Api key
-- -Stability Api key is personal paid usage 
+- Stability Api key is personal paid usage 
 
 ## Streamlit Cloud
 

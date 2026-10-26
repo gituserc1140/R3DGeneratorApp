@@ -7,8 +7,8 @@ Welcome to StudioRK3dps Community App & API Workflow Adaptation Streamlit app fo
 
 ## Features
 
-- Image generation with OpenAI or SDXL via Hugging Face
-- 3D model generation with Stability AI or Tripo3D
+- Image generation with OpenAI
+- 3D model generation with Stability AI
 - Interactive GLB viewer in the browser
 - AI chat assistant powered by Cohere for idea generation and workflow guidance
 - Cohere-powered 3D image prompt ideas
@@ -30,8 +30,6 @@ Example `.env` file:
 ```bash
 OPENAI_API_KEY=your_openai_key
 STABILITY_KEY=your_stability_key
-HF_TOKEN=your_huggingface_token
-TRIPO3D_API_KEY=your_tripo3d_key
 COHERE_API_KEY=your_cohere_key
 ```
 
@@ -46,8 +44,6 @@ streamlit run streamlit_app.py
 - If you see an OpenAI error like `billing_hard_limit_reached`, the active key/project has no remaining billing capacity.
 - Rotate to a personal paid funded key and update `OPENAI_API_KEY` in your local `.env` (or Streamlit secrets or frontend).
 - The app re-reads `.env` during key lookup, so key rotation is picked up on the next request.
-- As a fall-back, switch image mode to `Slow_Mode_SDXL` corresponds with huggingface Tokens.
-- Triposr allows for free trial usage for Api key
 - Stability Api key is personal paid usage 
 
 ## Streamlit Cloud

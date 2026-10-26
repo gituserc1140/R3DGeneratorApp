@@ -23,7 +23,6 @@ USER_KEY_FIELDS = [
     ("user_openai_key", "OpenAI API key", ["OPENAI_API_KEY"]),
     ("user_cohere_key", "Cohere API key", ["COHERE_API_KEY", "COHERE_KEY", "RKStudioCohere", "RKSTUDIO_COHERE_API_KEY"]),
     ("user_stability_key", "Stability AI API key", ["STABILITY_KEY", "STABILITY_API_KEY"]),
-    ("user_hf_key", "Hugging Face token", ["HF_TOKEN", "HUGGINGFACE_API_KEY", "RKStudioHF1"]),
     ("user_tripo_key", "Tripo3D API key", ["TRIPO3D_API_KEY", "RKStudioTripo"]),
 ]
 
@@ -817,7 +816,6 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
 
     with tab1:
         st.caption("Remember to check API usage!")
-        mode = st.selectbox("Select Image Generation Mode", ["Fast_Mode_OA", "Slow_Mode_SDXL"], index=0, key="image_mode_select")
         prompt = st.text_area(
             "Image prompt",
             value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
@@ -825,7 +823,7 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
 
         if st.button("Generate Image"):
             with st.spinner("Generating image..."):
-                image_path = generate_image_openai(prompt) if mode == "Fast_Mode_OA" else generate_image_sdxl(prompt)
+                image_path = generate_image_openai(prompt)
                 if image_path:
                     st.session_state["image_path"] = image_path
                     st.image(image_path, caption="Generated Image", width=400)
@@ -1301,8 +1299,7 @@ def _friendly_openai_image_error(exc):
     if "billing_hard_limit_reached" in lowered or "billing hard limit has been reached" in lowered:
         return (
             "OpenAI billing limit reached for the active key/project. "
-            "Use a funded key, then update OPENAI_API_KEY in your .env or Streamlit secrets and try again. "
-            "You can also switch to Slow_Mode_SDXL as a fallback."
+            "Use a funded key, then update OPENAI_API_KEY in your .env or Streamlit secrets and try again."
         )
 
     if "invalid_api_key" in lowered or "incorrect api key" in lowered:
@@ -1345,37 +1342,6 @@ def generate_image_openai(prompt: str) -> str:
         return tmp.name
     except Exception as e:
         st.error(_friendly_openai_image_error(e))
-        traceback.print_exc()
-        return ""
-
-
-def generate_image_sdxl(prompt: str) -> str:
-    try:
-        hf_token = (
-            get_api_key("HF_TOKEN")
-            or get_api_key("HUGGINGFACE_API_KEY")
-            or get_api_key("RKStudioHF1")
-        )
-        if not hf_token:
-            raise ValueError("Set HF_TOKEN, HUGGINGFACE_API_KEY, or RKStudioHF1 in your .env, or enter a Hugging Face token in the sidebar")
-
-        api_url = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {
-            "Authorization": f"Bearer {hf_token}",
-            "Accept": "image/png",
-        }
-        payload = {"inputs": prompt}
-
-        response = requests.post(api_url, headers=headers, json=payload, timeout=180)
-        if response.status_code != 200:
-            raise Exception(f"Hugging Face SDXL request failed ({response.status_code}): {response.text}")
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp.write(response.content)
-        tmp.close()
-        return tmp.name
-    except Exception as e:
-        st.error(f"SDXL image generation failed: {e}")
         traceback.print_exc()
         return ""
 

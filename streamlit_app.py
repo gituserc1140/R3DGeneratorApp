@@ -816,6 +816,22 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
 
     with tab1:
         st.caption("Remember to check API usage!")
+
+        if "openai_image_model_select" not in st.session_state:
+            st.session_state["openai_image_model_select"] = get_openai_image_model_name() or "gpt-image-1"
+
+        image_model_options = _openai_image_model_options()
+        if st.session_state["openai_image_model_select"] not in image_model_options:
+            image_model_options.insert(0, st.session_state["openai_image_model_select"])
+
+        selected_model = st.selectbox(
+            "OpenAI image model",
+            image_model_options,
+            index=image_model_options.index(st.session_state["openai_image_model_select"]),
+            key="openai_image_model_select",
+        )
+        os.environ["OPENAI_IMAGE_MODEL"] = selected_model
+
         prompt = st.text_area(
             "Image prompt",
             value="One Single Stylized simple multicoloured Common Holly performing Heterophylly whilst presented on a sturdy figurine base suitable for 3D printing.",
@@ -1320,7 +1336,14 @@ def _is_expected_openai_image_error(exc):
 
 
 def get_openai_image_model_name():
-    """Return the configured OpenAI image model from the current env or secrets."""
+    """Return the configured OpenAI image model from UI state, env, or secrets."""
+    try:
+        ui_model = (st.session_state.get("openai_image_model_select") or "").strip()
+        if ui_model:
+            return ui_model
+    except Exception:
+        pass
+
     load_dotenv(override=True)
     configured = (os.environ.get("OPENAI_IMAGE_MODEL") or "").strip()
     if configured:
@@ -1330,6 +1353,15 @@ def get_openai_image_model_name():
     except Exception:
         configured = ""
     return configured
+
+
+def _openai_image_model_options():
+    """Return supported OpenAI image models as a user-friendly dropdown list."""
+    options = ["gpt-image-1", "dall-e-3", "dall-e-2"]
+    configured = get_openai_image_model_name()
+    if configured and configured not in options:
+        options.insert(0, configured)
+    return options
 
 
 def _openai_image_model_candidates():

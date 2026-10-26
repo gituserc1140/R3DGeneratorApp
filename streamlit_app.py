@@ -1,6 +1,5 @@
 import os
 import tempfile
-import time
 import traceback
 import io
 import math
@@ -23,7 +22,6 @@ USER_KEY_FIELDS = [
     ("user_openai_key", "OpenAI API key", ["OPENAI_API_KEY"]),
     ("user_cohere_key", "Cohere API key", ["COHERE_API_KEY", "COHERE_KEY", "RKStudioCohere", "RKSTUDIO_COHERE_API_KEY"]),
     ("user_stability_key", "Stability AI API key", ["STABILITY_KEY", "STABILITY_API_KEY"]),
-    ("user_tripo_key", "Tripo3D API key", ["TRIPO3D_API_KEY", "RKStudioTripo"]),
 ]
 
 
@@ -830,7 +828,6 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
 
     with tab2:
         st.caption("Remember to check API usage!")
-        mode = st.selectbox("Select 3D Model Generation Mode", ["Medium_Quality_Mode_STA", "High_Quality_Mode_TRO"], index=0, key="model_mode_select")
         image_path = st.session_state.get("image_path")
 
         uploaded = st.file_uploader("Upload an image (optional)", type=["png", "jpg", "jpeg"], key="model_image_upload")
@@ -845,49 +842,32 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
         else:
             st.image(image_path, caption="Input Image", width=300)
 
-            if mode in ["Medium_Quality_Mode_STA", "Medium_Quality_Mode"]:
-                texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
-                foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
-                remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
-                vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
-                filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_sta")
+            texture_resolution = st.selectbox("Texture Resolution", ["512", "1024", "2048"], index=1)
+            foreground_ratio = st.slider("Foreground Ratio", 0.1, 1.0, 0.85, 0.05)
+            remesh = st.selectbox("Remesh", ["none", "quad", "triangle"])
+            vertex_count = st.number_input("Vertex Count (-1 = auto)", value=-1)
+            filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_sta")
 
-                if st.button("Generate 3D Model", key="generate_3d_stability"):
-                    with st.spinner("Generating 3D model..."):
-                        glb_path = generate_3d_model_stability(
-                            image_path,
-                            texture_resolution,
-                            foreground_ratio,
-                            remesh,
-                            vertex_count,
-                        )
-                        if glb_path:
-                            persist_glb_in_session(glb_path)
-                            st.success("3D model generated!")
-                            safe_name = sanitize_filename(filename_glb) or "model"
-                            with open(glb_path, "rb") as f:
-                                st.download_button(
-                                    "Download GLB",
-                                    f,
-                                    file_name=f"{safe_name}.glb",
-                                    mime="model/gltf-binary",
-                                )
-            else:
-                filename_glb = st.text_input("GLB filename (no extension)", value="model", key="filename_glb_tab2_tripo")
-                if st.button("Generate 3D Model", key="generate_3d_tripo"):
-                    with st.spinner("Generating 3D model..."):
-                        glb_path = generate_3d_model_tripo(image_path)
-                        if glb_path:
-                            persist_glb_in_session(glb_path)
-                            st.success("3D model generated!")
-                            safe_name = sanitize_filename(filename_glb) or "model"
-                            with open(glb_path, "rb") as f:
-                                st.download_button(
-                                    "Download GLB",
-                                    f,
-                                    file_name=f"{safe_name}.glb",
-                                    mime="model/gltf-binary",
-                                )
+            if st.button("Generate 3D Model", key="generate_3d_stability"):
+                with st.spinner("Generating 3D model..."):
+                    glb_path = generate_3d_model_stability(
+                        image_path,
+                        texture_resolution,
+                        foreground_ratio,
+                        remesh,
+                        vertex_count,
+                    )
+                    if glb_path:
+                        persist_glb_in_session(glb_path)
+                        st.success("3D model generated!")
+                        safe_name = sanitize_filename(filename_glb) or "model"
+                        with open(glb_path, "rb") as f:
+                            st.download_button(
+                                "Download GLB",
+                                f,
+                                file_name=f"{safe_name}.glb",
+                                mime="model/gltf-binary",
+                            )
 
             current_glb_path = get_session_glb_path()
             if current_glb_path and os.path.exists(current_glb_path):
@@ -1399,98 +1379,6 @@ def generate_3d_model_stability(image_path, texture_resolution, foreground_ratio
         traceback.print_exc()
         return ""
 
-
-def upload_image_to_tripo3d(image_path: str, api_key: str) -> str:
-    upload_url = "https://api.tripo3d.ai/v2/openapi/upload/sts"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    file_extension = os.path.splitext(image_path)[1].lstrip('.').lower()
-    mime_type = f"image/{file_extension}" if file_extension in ["jpeg", "jpg", "png"] else "application/octet-stream"
-
-    with open(image_path, "rb") as image_file:
-        files = {"file": (os.path.basename(image_path), image_file, mime_type)}
-        response = requests.post(upload_url, headers=headers, files=files, timeout=60)
-
-    response.raise_for_status()
-    response_json = response.json()
-    file_token = response_json.get("data", {}).get("image_token")
-    if not file_token:
-        raise Exception(f"Could not find image_token in upload response: {response_json}")
-    return file_token
-
-
-def create_tripo3d_task(file_token: str, image_path: str, api_key: str) -> str:
-    generation_url = "https://api.tripo3d.ai/v2/openapi/task"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-
-    file_extension = os.path.splitext(image_path)[1].lstrip('.').lower()
-    data = {
-        "type": "image_to_model",
-        "file": {
-            "type": file_extension,
-            "file_token": file_token,
-        },
-    }
-
-    response = requests.post(generation_url, headers=headers, json=data, timeout=60)
-    response.raise_for_status()
-    response_json = response.json()
-    task_id = response_json.get("data", {}).get("task_id")
-    if not task_id:
-        raise Exception(f"Could not find task_id in task response: {response_json}")
-    return task_id
-
-
-def poll_tripo3d_task(task_id: str, api_key: str, timeout_seconds: int = 300, interval_seconds: int = 5) -> dict:
-    status_url = f"https://api.tripo3d.ai/v2/openapi/task/{task_id}"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    start_time = time.time()
-    while time.time() - start_time < timeout_seconds:
-        response = requests.get(status_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        payload = response.json()
-
-        status = payload.get("data", {}).get("status", "").lower()
-        if status in {"succeeded", "success", "completed", "done"}:
-            return payload
-        if status in {"failed", "error", "cancelled"}:
-            raise Exception(f"Tripo3D task failed: {payload}")
-
-        time.sleep(interval_seconds)
-
-    raise TimeoutError("Timed out waiting for Tripo3D task completion")
-
-
-def generate_3d_model_tripo(image_path):
-    try:
-        api_key = get_api_key("TRIPO3D_API_KEY") or get_api_key("RKStudioTripo")
-        if not api_key:
-            raise ValueError("Enter a Tripo3D API key in the sidebar (or set TRIPO3D_API_KEY)")
-
-        file_token = upload_image_to_tripo3d(image_path, api_key)
-        task_id = create_tripo3d_task(file_token, image_path, api_key)
-        final_payload = poll_tripo3d_task(task_id, api_key)
-
-        download_url = final_payload.get("data", {}).get("output", {}).get("pbr_model")
-        if not download_url:
-            raise Exception(f"Failed to retrieve download URL from Tripo3D response: {final_payload}")
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
-        with requests.get(download_url, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            for chunk in r.iter_content(chunk_size=8192):
-                tmp.write(chunk)
-        tmp.close()
-
-        return tmp.name
-    except Exception as e:
-        st.error(f"Tripo3D model generation failed: {e}")
-        traceback.print_exc()
-        return ""
 
 
 if __name__ == "__main__":

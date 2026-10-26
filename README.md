@@ -3,6 +3,8 @@
 Welcome to StudioRK3dps Community App & API Workflow Adaptation Streamlit app for turning text prompts into images and then converting those images into 3D models.
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://studiork3dps-community-app-7ujeaa3i9kknheoguwqw8d.streamlit.app/)
+[![TikTok](https://img.shields.io/badge/TikTok-@studiork3dps-000000?style=for-the-badge&logo=tiktok&logoColor=white)](https://www.tiktok.com/@studiork3dps)
+[![Instagram](https://img.shields.io/badge/Instagram-@rk3dps-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/rk3dps/)
 
 ## Features
 

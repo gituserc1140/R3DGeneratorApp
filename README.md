@@ -1,4 +1,4 @@
-**##StudioRK3dps-Community-App-API-Workflow-Adaptation**
+**StudioRK3dps-Community-App-API-Workflow-Adaptation**
 
 Streamlit app for turning text prompts into images and then converting those images into 3D models.
 

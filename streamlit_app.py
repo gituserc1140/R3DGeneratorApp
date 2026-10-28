@@ -24,9 +24,6 @@ USER_KEY_FIELDS = [
     ("user_openai_key", "OpenAI API key", ["OPENAI_API_KEY"]),
     ("user_cohere_key", "Cohere API key", ["COHERE_API_KEY", "COHERE_KEY", "RKStudioCohere", "RKSTUDIO_COHERE_API_KEY"]),
     ("user_stability_key", "Stability AI API key", ["STABILITY_KEY", "STABILITY_API_KEY"]),
-    ("user_openrouter_key", "OpenRouter API key", ["OPENROUTER_API_KEY"]),
-    ("user_together_key", "Together AI API key", ["TOGETHER_API_KEY"]),
-    ("user_replicate_key", "Replicate API key", ["REPLICATE_API_KEY"]),
     ("user_pollinations_key", "Pollinations API key (optional)", ["POLLINATIONS_API_KEY", "POLLINATIONS_KEY"]),
 ]
 
@@ -148,9 +145,6 @@ def _provider_options():
     return [
         "OpenAI",
         "Pollinations",
-        "OpenRouter",
-        "Together AI",
-        "Replicate",
     ]
 
 
@@ -169,9 +163,6 @@ def _require_key_for_provider(provider):
     """Return the env variable name required for a provider or raise a friendly error."""
     keys = {
         "OpenAI": "OPENAI_API_KEY",
-        "OpenRouter": "OPENROUTER_API_KEY",
-        "Together AI": "TOGETHER_API_KEY",
-        "Replicate": "REPLICATE_API_KEY",
         "Pollinations": "POLLINATIONS_API_KEY",
     }
     key_name = keys.get(provider)
@@ -181,12 +172,6 @@ def _require_key_for_provider(provider):
     if value:
         return value
     raise ValueError(f"{key_name} not found in environment or secrets")
-
-
-def _fetch_image_bytes_from_url(url, timeout=90):
-    response = requests.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.content
 
 
 def _write_temp_image(data):
@@ -218,121 +203,6 @@ def _generate_image_pollinations(prompt: str) -> str:
     raise RuntimeError("Pollinations did not return image data.")
 
 
-def _generate_image_openrouter(prompt: str) -> str:
-    """Generate an image via OpenRouter's image-capable models."""
-    api_key = get_api_key("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY not found in environment or secrets")
-
-    payload = {
-        "model": os.environ.get("OPENROUTER_IMAGE_MODEL", "openai/gpt-image-1"),
-        "messages": [
-            {"role": "user", "content": [{"type": "text", "text": prompt}]}
-        ],
-        "response_format": {"type": "image_url"},
-    }
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": "Bearer " + api_key,
-            "HTTP-Referer": "https://studio-rk3dps-community-app.streamlit.app/",
-            "X-Title": "StudioRK3dps",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=180,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"OpenRouter image request failed ({response.status_code}): {response.text[:500]}")
-    data = response.json()
-    content = data.get("choices", [{}])[0].get("message", {}).get("content")
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict):
-                url = item.get("image_url", {}).get("url") or item.get("url")
-                if url:
-                    return _write_temp_image(_fetch_image_bytes_from_url(url))
-    if isinstance(content, str):
-        if content.startswith("http"):
-            return _write_temp_image(_fetch_image_bytes_from_url(content))
-        raise RuntimeError("OpenRouter returned a non-image response.")
-    raise RuntimeError("OpenRouter response did not include image data.")
-
-
-def _generate_image_together(prompt: str) -> str:
-    """Generate an image via Together AI image models."""
-    api_key = get_api_key("TOGETHER_API_KEY")
-    if not api_key:
-        raise ValueError("TOGETHER_API_KEY not found in environment or secrets")
-
-    payload = {
-        "model": os.environ.get("TOGETHER_IMAGE_MODEL", "blackforestlabs/flux-1.1-pro"),
-        "prompt": prompt,
-        "height": 1024,
-        "width": 1024,
-        "steps": 28,
-        "n": 1,
-    }
-    response = requests.post(
-        "https://api.together.xyz/v1/images/generations",
-        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
-        json=payload,
-        timeout=180,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"Together AI image request failed ({response.status_code}): {response.text[:500]}")
-    payload = response.json()
-    image_url = payload.get("data", [{}])[0].get("url") or payload.get("output", [{}])[0]
-    if not image_url:
-        raise RuntimeError("Together AI response did not include an image URL.")
-    return _write_temp_image(_fetch_image_bytes_from_url(image_url))
-
-
-def _generate_image_replicate(prompt: str) -> str:
-    """Generate an image via Replicate model predictions."""
-    api_key = get_api_key("REPLICATE_API_KEY")
-    if not api_key:
-        raise ValueError("REPLICATE_API_KEY not found in environment or secrets")
-
-    model_name = os.environ.get("REPLICATE_IMAGE_MODEL", "blackforestlabs/flux-1.1-pro")
-    payload = {
-        "version": os.environ.get("REPLICATE_IMAGE_VERSION") or None,
-        "input": {"prompt": prompt, "width": 1024, "height": 1024},
-    }
-    if payload["version"] is None:
-        payload.pop("version")
-
-    response = requests.post(
-        f"https://api.replicate.com/v1/models/{quote(model_name)}/predictions",
-        headers={
-            "Authorization": "Token " + api_key,
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=180,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"Replicate image request failed ({response.status_code}): {response.text[:500]}")
-    result = response.json()
-    prediction_id = result.get("id")
-    if not prediction_id:
-        raise RuntimeError("Replicate response did not include a prediction ID.")
-
-    status_url = f"https://api.replicate.com/v1/predictions/{prediction_id}"
-    for _ in range(90):
-        status = requests.get(status_url, headers={"Authorization": "Token " + api_key}, timeout=60)
-        status.raise_for_status()
-        status_json = status.json()
-        output = status_json.get("output")
-        if isinstance(output, list) and output:
-            image_url = output[0]
-            return _write_temp_image(_fetch_image_bytes_from_url(image_url))
-        if status_json.get("status") == "succeeded" and isinstance(output, str):
-            return _write_temp_image(_fetch_image_bytes_from_url(output))
-        time.sleep(2)
-    raise RuntimeError("Replicate image generation timed out.")
-
-
 def generate_image_with_provider(prompt: str, provider: str) -> str:
     """Generate an image using any configured provider."""
     provider = provider or "OpenAI"
@@ -340,12 +210,6 @@ def generate_image_with_provider(prompt: str, provider: str) -> str:
         return generate_image_openai(prompt)
     if provider == "Pollinations":
         return _generate_image_pollinations(prompt)
-    if provider == "OpenRouter":
-        return _generate_image_openrouter(prompt)
-    if provider == "Together AI":
-        return _generate_image_together(prompt)
-    if provider == "Replicate":
-        return _generate_image_replicate(prompt)
     raise ValueError(f"Unsupported image provider: {provider}")
 
 

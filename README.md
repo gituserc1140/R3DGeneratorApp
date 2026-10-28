@@ -13,7 +13,7 @@ Attributions to API tech providers and frameworks!
 
 ## Features
 
-- Image generation with OpenAI
+- Image generation with OpenAI or Pollinations
 - 3D model generation with Stability AI
 - Interactive GLB viewer in the browser
 - AI chat assistant powered by Cohere for idea generation and workflow guidance
@@ -57,5 +57,4 @@ streamlit run streamlit_app.py
 ## Streamlit Cloud
 
 Use `streamlit_app.py` as the app entry point and add API keys in Streamlit secrets or environment variables. The repo is structured so it can be connected directly to Streamlit Cloud.
-
 

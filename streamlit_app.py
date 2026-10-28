@@ -1696,6 +1696,9 @@ def image_to_3d(host, image_path, **kwargs):
     if not stability_key:
         raise ValueError("STABILITY_KEY/STABILITY_API_KEY not found in environment or secrets")
 
+    # Stability's 3D endpoint requires a genuine multipart/form-data upload.
+    # Sending kwargs as raw form fields without the file part triggers the exact
+    # "content-type: must be multipart/form-data" response seen in production.
     with open(image_path, "rb") as image_file:
         response = requests.post(
             host,
@@ -1703,7 +1706,8 @@ def image_to_3d(host, image_path, **kwargs):
                 "Authorization": "Bearer " + stability_key,
                 "Accept": "model/gltf-binary",
             },
-            data=kwargs,
+            files={"image": (os.path.basename(image_path), image_file, "image/png")},
+            data={str(k): str(v) for k, v in kwargs.items() if v is not None},
             timeout=180,
         )
 

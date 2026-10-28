@@ -4,6 +4,8 @@ import traceback
 import io
 import math
 import base64
+import time
+from urllib.parse import quote
 
 import numpy as np
 import plotly.graph_objects as go
@@ -22,6 +24,10 @@ USER_KEY_FIELDS = [
     ("user_openai_key", "OpenAI API key", ["OPENAI_API_KEY"]),
     ("user_cohere_key", "Cohere API key", ["COHERE_API_KEY", "COHERE_KEY", "RKStudioCohere", "RKSTUDIO_COHERE_API_KEY"]),
     ("user_stability_key", "Stability AI API key", ["STABILITY_KEY", "STABILITY_API_KEY"]),
+    ("user_openrouter_key", "OpenRouter API key", ["OPENROUTER_API_KEY"]),
+    ("user_together_key", "Together AI API key", ["TOGETHER_API_KEY"]),
+    ("user_replicate_key", "Replicate API key", ["REPLICATE_API_KEY"]),
+    ("user_pollinations_key", "Pollinations API key (optional)", ["POLLINATIONS_API_KEY", "POLLINATIONS_KEY"]),
 ]
 
 
@@ -135,6 +141,212 @@ def get_cohere_response(api_key, user_input, history, model_name, temperature, m
             return text
 
     raise ValueError("No response text returned by Cohere")
+
+
+def _provider_options():
+    """List the image generation providers exposed in the UI."""
+    return [
+        "OpenAI",
+        "Pollinations",
+        "OpenRouter",
+        "Together AI",
+        "Replicate",
+    ]
+
+
+def _get_image_provider_name():
+    """Return the selected image provider from session or env."""
+    try:
+        value = (st.session_state.get("image_provider") or "").strip()
+        if value:
+            return value
+    except Exception:
+        pass
+    return os.environ.get("DEFAULT_IMAGE_PROVIDER", "OpenAI")
+
+
+def _require_key_for_provider(provider):
+    """Return the env variable name required for a provider or raise a friendly error."""
+    keys = {
+        "OpenAI": "OPENAI_API_KEY",
+        "OpenRouter": "OPENROUTER_API_KEY",
+        "Together AI": "TOGETHER_API_KEY",
+        "Replicate": "REPLICATE_API_KEY",
+        "Pollinations": "POLLINATIONS_API_KEY",
+    }
+    key_name = keys.get(provider)
+    if key_name is None:
+        return None
+    value = get_api_key(key_name)
+    if value:
+        return value
+    raise ValueError(f"{key_name} not found in environment or secrets")
+
+
+def _fetch_image_bytes_from_url(url, timeout=90):
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.content
+
+
+def _write_temp_image(data):
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    tmp.write(data)
+    tmp.close()
+    return tmp.name
+
+
+def _generate_image_pollinations(prompt: str) -> str:
+    """Generate an image via Pollinations with a simple URL-based API."""
+    api_key = get_api_key("POLLINATIONS_API_KEY") or get_api_key("POLLINATIONS_KEY")
+    params = {
+        "prompt": prompt,
+        "model": "flux",
+        "seed": int(time.time() * 1000) % 100000,
+        "width": 1024,
+        "height": 1024,
+        "nologo": "true",
+    }
+    if api_key:
+        params["token"] = api_key
+    url = "https://image.pollinations.ai/prompt/" + quote(prompt)
+    response = requests.get(url, params=params, timeout=120)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Pollinations image request failed ({response.status_code}): {response.text[:400]}")
+    if response.headers.get("content-type", "").startswith("image/"):
+        return _write_temp_image(response.content)
+    raise RuntimeError("Pollinations did not return image data.")
+
+
+def _generate_image_openrouter(prompt: str) -> str:
+    """Generate an image via OpenRouter's image-capable models."""
+    api_key = get_api_key("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not found in environment or secrets")
+
+    payload = {
+        "model": os.environ.get("OPENROUTER_IMAGE_MODEL", "openai/gpt-image-1"),
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        ],
+        "response_format": {"type": "image_url"},
+    }
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "HTTP-Referer": "https://studio-rk3dps-community-app.streamlit.app/",
+            "X-Title": "StudioRK3dps",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=180,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"OpenRouter image request failed ({response.status_code}): {response.text[:500]}")
+    data = response.json()
+    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                url = item.get("image_url", {}).get("url") or item.get("url")
+                if url:
+                    return _write_temp_image(_fetch_image_bytes_from_url(url))
+    if isinstance(content, str):
+        if content.startswith("http"):
+            return _write_temp_image(_fetch_image_bytes_from_url(content))
+        raise RuntimeError("OpenRouter returned a non-image response.")
+    raise RuntimeError("OpenRouter response did not include image data.")
+
+
+def _generate_image_together(prompt: str) -> str:
+    """Generate an image via Together AI image models."""
+    api_key = get_api_key("TOGETHER_API_KEY")
+    if not api_key:
+        raise ValueError("TOGETHER_API_KEY not found in environment or secrets")
+
+    payload = {
+        "model": os.environ.get("TOGETHER_IMAGE_MODEL", "blackforestlabs/flux-1.1-pro"),
+        "prompt": prompt,
+        "height": 1024,
+        "width": 1024,
+        "steps": 28,
+        "n": 1,
+    }
+    response = requests.post(
+        "https://api.together.xyz/v1/images/generations",
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=180,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Together AI image request failed ({response.status_code}): {response.text[:500]}")
+    payload = response.json()
+    image_url = payload.get("data", [{}])[0].get("url") or payload.get("output", [{}])[0]
+    if not image_url:
+        raise RuntimeError("Together AI response did not include an image URL.")
+    return _write_temp_image(_fetch_image_bytes_from_url(image_url))
+
+
+def _generate_image_replicate(prompt: str) -> str:
+    """Generate an image via Replicate model predictions."""
+    api_key = get_api_key("REPLICATE_API_KEY")
+    if not api_key:
+        raise ValueError("REPLICATE_API_KEY not found in environment or secrets")
+
+    model_name = os.environ.get("REPLICATE_IMAGE_MODEL", "blackforestlabs/flux-1.1-pro")
+    payload = {
+        "version": os.environ.get("REPLICATE_IMAGE_VERSION") or None,
+        "input": {"prompt": prompt, "width": 1024, "height": 1024},
+    }
+    if payload["version"] is None:
+        payload.pop("version")
+
+    response = requests.post(
+        f"https://api.replicate.com/v1/models/{quote(model_name)}/predictions",
+        headers={
+            "Authorization": "Token " + api_key,
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=180,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Replicate image request failed ({response.status_code}): {response.text[:500]}")
+    result = response.json()
+    prediction_id = result.get("id")
+    if not prediction_id:
+        raise RuntimeError("Replicate response did not include a prediction ID.")
+
+    status_url = f"https://api.replicate.com/v1/predictions/{prediction_id}"
+    for _ in range(90):
+        status = requests.get(status_url, headers={"Authorization": "Token " + api_key}, timeout=60)
+        status.raise_for_status()
+        status_json = status.json()
+        output = status_json.get("output")
+        if isinstance(output, list) and output:
+            image_url = output[0]
+            return _write_temp_image(_fetch_image_bytes_from_url(image_url))
+        if status_json.get("status") == "succeeded" and isinstance(output, str):
+            return _write_temp_image(_fetch_image_bytes_from_url(output))
+        time.sleep(2)
+    raise RuntimeError("Replicate image generation timed out.")
+
+
+def generate_image_with_provider(prompt: str, provider: str) -> str:
+    """Generate an image using any configured provider."""
+    provider = provider or "OpenAI"
+    if provider == "OpenAI":
+        return generate_image_openai(prompt)
+    if provider == "Pollinations":
+        return _generate_image_pollinations(prompt)
+    if provider == "OpenRouter":
+        return _generate_image_openrouter(prompt)
+    if provider == "Together AI":
+        return _generate_image_together(prompt)
+    if provider == "Replicate":
+        return _generate_image_replicate(prompt)
+    raise ValueError(f"Unsupported image provider: {provider}")
 
 
 def _project_point_iso(point):
@@ -817,20 +1029,34 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
     with tab1:
         st.caption("Remember to check API usage!")
 
-        if "openai_image_model_select" not in st.session_state:
-            st.session_state["openai_image_model_select"] = get_openai_image_model_name() or "gpt-image-1"
+        if "image_provider" not in st.session_state:
+            st.session_state["image_provider"] = _get_image_provider_name()
 
-        image_model_options = _openai_image_model_options()
-        if st.session_state["openai_image_model_select"] not in image_model_options:
-            image_model_options.insert(0, st.session_state["openai_image_model_select"])
-
-        selected_model = st.selectbox(
-            "OpenAI image model",
-            image_model_options,
-            index=image_model_options.index(st.session_state["openai_image_model_select"]),
-            key="openai_image_model_select",
+        provider_options = _provider_options()
+        provider = st.selectbox(
+            "Image provider",
+            provider_options,
+            index=provider_options.index(st.session_state.get("image_provider", "OpenAI")) if st.session_state.get("image_provider", "OpenAI") in provider_options else 0,
+            key="image_provider",
         )
-        os.environ["OPENAI_IMAGE_MODEL"] = selected_model
+
+        if provider == "OpenAI":
+            if "openai_image_model_select" not in st.session_state:
+                st.session_state["openai_image_model_select"] = get_openai_image_model_name() or "gpt-image-1"
+
+            image_model_options = _openai_image_model_options()
+            if st.session_state["openai_image_model_select"] not in image_model_options:
+                image_model_options.insert(0, st.session_state["openai_image_model_select"])
+
+            selected_model = st.selectbox(
+                "OpenAI image model",
+                image_model_options,
+                index=image_model_options.index(st.session_state["openai_image_model_select"]),
+                key="openai_image_model_select",
+            )
+            os.environ["OPENAI_IMAGE_MODEL"] = selected_model
+        else:
+            st.caption(f"Using {provider} for image generation. Add the matching API key in the sidebar or your .env file.")
 
         prompt = st.text_area(
             "Image prompt",
@@ -838,11 +1064,14 @@ APIs can be inserted in the sidebar on the left — click the arrow to open it.
         )
 
         if st.button("Generate Image"):
-            with st.spinner("Generating image..."):
-                image_path = generate_image_openai(prompt)
-                if image_path:
-                    st.session_state["image_path"] = image_path
-                    st.image(image_path, caption="Generated Image", width=400)
+            with st.spinner(f"Generating image with {provider}..."):
+                try:
+                    image_path = generate_image_with_provider(prompt, provider)
+                    if image_path:
+                        st.session_state["image_path"] = image_path
+                        st.image(image_path, caption=f"Generated Image ({provider})", width=400)
+                except Exception as exc:
+                    st.error(str(exc))
 
     with tab2:
         st.caption("Remember to check API usage!")
@@ -1471,10 +1700,9 @@ def image_to_3d(host, image_path, **kwargs):
         response = requests.post(
             host,
             headers={
-                "Authorization": f"Bearer {stability_key}",
+                "Authorization": "Bearer " + stability_key,
                 "Accept": "model/gltf-binary",
             },
-            files={"image": image_file},
             data=kwargs,
             timeout=180,
         )
